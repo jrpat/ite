@@ -50,6 +50,9 @@ fn run() -> Result<ExitCode, String> {
     }
     let tree = FsTree::scan(&dir, cli.no_ignore).map_err(|e| e.to_string())?;
     let mut app = App::new(tree, &config, cli.expand);
+    // Query before entering the alternate screen; terminals that don't answer
+    // are detected quickly and leave the reverse-video fallback in place.
+    app.palette = query_palette();
 
     // The tree draws on stderr so the selected path on stdout can be piped.
     let mut tui = Tui::enter().map_err(|e| e.to_string())?;
@@ -73,6 +76,15 @@ fn run() -> Result<ExitCode, String> {
             None => ExitCode::SUCCESS,
         }),
     }
+}
+
+fn query_palette() -> Option<ite::ui::Palette> {
+    let palette =
+        terminal_colorsaurus::color_palette(terminal_colorsaurus::QueryOptions::default()).ok()?;
+    Some(ite::ui::Palette {
+        fg: palette.foreground.scale_to_8bit(),
+        bg: palette.background.scale_to_8bit(),
+    })
 }
 
 enum Outcome {

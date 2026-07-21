@@ -44,6 +44,7 @@ fn columns() -> TreeColumnSet<'static, FsTree> {
         ColumnWidth::flexible(1, 40).expect("valid width"),
     )])
     .expect("a single tree column is valid")
+    .without_header()
 }
 
 /// Compact guides with no horizontal tails: `├ • cli.rs`.
@@ -60,12 +61,38 @@ const GLYPHS: TreeGlyphs<'static> = TreeGlyphs {
     loading: "◌",
 };
 
-/// Style restricted to the default terminal palette: reversed-video focus,
-/// dark-gray guide lines, no border.
-fn style() -> TreeListViewStyle<'static> {
+/// The terminal's default foreground and background, queried at startup.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Palette {
+    pub fg: (u8, u8, u8),
+    pub bg: (u8, u8, u8),
+}
+
+impl Palette {
+    /// The focus-bar background: the default foreground blended over the
+    /// default background at 10% opacity (terminals have no real
+    /// translucency, so we premix the color).
+    pub fn focus_bg(&self) -> Color {
+        let blend = |bg: u8, fg: u8| ((u16::from(bg) * 9 + u16::from(fg) + 5) / 10) as u8;
+        Color::Rgb(
+            blend(self.bg.0, self.fg.0),
+            blend(self.bg.1, self.fg.1),
+            blend(self.bg.2, self.fg.2),
+        )
+    }
+}
+
+/// Focus uses a translucent-looking blend of the terminal's own colors when
+/// known, and falls back to reverse video. Guide lines keep the normal text
+/// color. No border, no header.
+fn style(palette: Option<Palette>) -> TreeListViewStyle<'static> {
+    let highlight_style = match palette {
+        Some(palette) => Style::default().bg(palette.focus_bg()),
+        None => Style::default().add_modifier(Modifier::REVERSED),
+    };
     TreeListViewStyle {
-        highlight_style: Style::default().add_modifier(Modifier::REVERSED),
-        line_style: Style::default().fg(Color::DarkGray),
+        highlight_style,
+        line_style: Style::default(),
         highlight_symbol: "",
         // Long names truncate at the viewport edge instead of paying for the
         // widget's off-screen virtual canvas.
@@ -83,8 +110,8 @@ pub fn draw(app: &mut App, area: Rect, buf: &mut ratatui::buffer::Buffer) {
     }
     let _span = crate::profile::span("ui::widget_render");
     let columns = columns();
-    let widget =
-        TreeListView::new(&app.tree, &app.query, &Label, &columns, style()).glyphs(GLYPHS);
+    let widget = TreeListView::new(&app.tree, &app.query, &Label, &columns, style(app.palette))
+        .glyphs(GLYPHS);
     widget.render(area, buf, &mut app.state);
 }
 
@@ -134,6 +161,59 @@ mod tests {
             "expected `└ • last.txt` in:\n{text}"
         );
         assert!(!text.contains('─'), "no horizontal tails in:\n{text}");
+    }
+
+    #[test]
+    fn focus_bg_blends_foreground_at_ten_percent() {
+        let white_on_black = Palette {
+            fg: (255, 255, 255),
+            bg: (0, 0, 0),
+        };
+        assert_eq!(white_on_black.focus_bg(), Color::Rgb(26, 26, 26));
+        let mixed = Palette {
+            fg: (0, 0, 0),
+            bg: (200, 100, 50),
+        };
+        assert_eq!(mixed.focus_bg(), Color::Rgb(180, 90, 45));
+    }
+
+    #[test]
+    fn focused_row_uses_blended_bg_when_palette_known() {
+        let (_d, mut app) = fixture_app();
+        app.palette = Some(Palette {
+            fg: (255, 255, 255),
+            bg: (0, 0, 0),
+        });
+        let (buf, text) = drawn(&mut app, 40, 10);
+        // Focus starts on the first row ("subdir").
+        assert!(text.starts_with("▼ subdir"), "{text}");
+        let cell = &buf[(0, 0)];
+        assert_eq!(cell.bg, Color::Rgb(26, 26, 26), "focused bg is the blend");
+        assert!(
+            !cell.modifier.contains(Modifier::REVERSED),
+            "no reverse video when the palette is known"
+        );
+    }
+
+    #[test]
+    fn focused_row_falls_back_to_reverse_video_without_palette() {
+        let (_d, mut app) = fixture_app();
+        assert_eq!(app.palette, None);
+        let (buf, text) = drawn(&mut app, 40, 10);
+        assert!(text.starts_with("▼ subdir"), "{text}");
+        assert!(
+            buf[(0, 0)].modifier.contains(Modifier::REVERSED),
+            "reverse video fallback"
+        );
+    }
+
+    #[test]
+    fn tree_guides_render_in_normal_text_color() {
+        let (_d, mut app) = fixture_app();
+        let (buf, text) = drawn(&mut app, 40, 10);
+        // Row 1 is `├ • inner.txt`; its guide glyph must not be recolored.
+        assert!(text.lines().nth(1).unwrap().starts_with('├'), "{text}");
+        assert_eq!(buf[(0, 1)].fg, Color::Reset, "guides use the default fg");
     }
 
     #[test]

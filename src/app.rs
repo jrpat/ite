@@ -37,6 +37,8 @@ pub struct App {
     pending_g: bool,
     /// Rows per screen; the UI updates this every frame.
     pub page_height: usize,
+    /// Terminal default colors, when the terminal answered the startup query.
+    pub palette: Option<crate::ui::Palette>,
 }
 
 impl App {
@@ -50,6 +52,7 @@ impl App {
             keymap,
             pending_g: false,
             page_height: 20,
+            palette: None,
         };
         match expand {
             None => {}

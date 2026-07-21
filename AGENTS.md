@@ -24,7 +24,10 @@ be piped.
   first, then make it pass.
 - This repo uses **Jujutsu**: commit with `jj commit`, never `git commit`.
 - UI colors must stay within the terminal's default ANSI palette (colors
-  0–16); never emit RGB values.
+  0–16); never emit hardcoded RGB values. The one sanctioned exception: the
+  focus-bar background is an RGB blend *derived from the terminal's own
+  colors* (queried via OSC 10/11 through terminal-colorsaurus at startup),
+  falling back to reverse video when the terminal doesn't answer.
 
 ## Architecture
 
