@@ -10,6 +10,13 @@ be piped.
 - `cargo test` — run all tests
 - `cargo clippy --all-targets` — must stay warning-free
 - `cargo run -- [PATH]` — run against a directory
+- `cargo profile-tui [PATH] [ITERS]` — headless performance profile (alias in
+  `.cargo/config.toml`): runs the release binary in a real PTY
+  (`examples/profile_driver.rs`), answers its terminal queries, simulates
+  keypresses, and prints per-key round-trip latency plus the app's internal
+  span table. Spans come from `src/profile.rs` and are enabled by
+  `ITE_PROFILE=<output-path>`; add `profile::span("label")` guards to
+  instrument new hot paths.
 
 ## Development rules
 
@@ -39,7 +46,14 @@ be piped.
 - `src/runner.rs` — runs `sh -c` bindings with `$path`/`$relpath` exported as
   env vars; `bg` detaches from stdio.
 - `src/ui.rs` — renders `TreeListView` (scrolling is built into the widget's
-  state) and records the viewport height for paging commands.
+  state) and records the viewport height for paging commands. Beware
+  `ColumnWidth::flexible(min, ideal)`: `ideal` is a layout target, not a cap —
+  a huge value makes the widget render a virtual canvas that wide every frame
+  (this was a ~300ms/frame debug-build regression; horizontal scroll is
+  disabled for the same reason). Guarded by the `repeated_draws_are_fast`
+  test.
+- `src/profile.rs` — span profiler (`Registry`, `Stats`), gated on
+  `ITE_PROFILE`; the driver example reuses its `Stats`/formatting.
 - `src/main.rs` — terminal lifecycle (raw mode + alt screen on stderr,
   best-effort kitty keyboard enhancement for `ctrl+enter`/`shift+arrow`),
   event loop, effect execution. Exit codes: 0 selection, 130 quit,

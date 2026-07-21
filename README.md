@@ -101,7 +101,14 @@ cargo build            # compile
 cargo run -- ~/src     # run against a directory
 cargo test             # the test suite (fast, no terminal needed)
 cargo clippy --all-targets   # lints; the build is kept warning-free
+cargo profile-tui      # headless perf profile: real pty, simulated keys
 ```
+
+`cargo profile-tui` (a cargo alias — cargo's answer to npm scripts) spawns
+the release binary in a genuine PTY, drives it with keypresses, and prints
+per-key latency plus an internal span table. If a keystroke ever feels
+sluggish, run it before theorizing; it has already caught one absurd
+regression.
 
 The codebase separates decisions from I/O: `app.rs` turns keys into `Effect`
 values (print this, run that, quit) and is fully unit-tested without a

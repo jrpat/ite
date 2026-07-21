@@ -36,9 +36,12 @@ impl TreeLabelRenderer<FsTree> for Label {
 }
 
 fn columns() -> TreeColumnSet<'static, FsTree> {
+    // Note: `flexible(min, ideal)` — the ideal must stay small. A huge ideal
+    // makes the widget lay out a virtual canvas of that width and render the
+    // whole thing every frame (a ~300ms/frame debug-build regression).
     TreeColumnSet::new([ColumnDef::tree(
         "",
-        ColumnWidth::flexible(1, u16::MAX).expect("valid width"),
+        ColumnWidth::flexible(1, 40).expect("valid width"),
     )])
     .expect("a single tree column is valid")
 }
@@ -50,6 +53,9 @@ fn style() -> TreeListViewStyle<'static> {
         highlight_style: Style::default().add_modifier(Modifier::REVERSED),
         line_style: Style::default().fg(Color::DarkGray),
         highlight_symbol: "",
+        // Long names truncate at the viewport edge instead of paying for the
+        // widget's off-screen virtual canvas.
+        horizontal_scroll: tui_treelistview::TreeHorizontalScroll::Disabled,
         ..TreeListViewStyle::borderless()
     }
 }
@@ -57,6 +63,11 @@ fn style() -> TreeListViewStyle<'static> {
 /// Render the tree into `area` and record the viewport height for paging.
 pub fn draw(app: &mut App, area: Rect, buf: &mut ratatui::buffer::Buffer) {
     app.page_height = area.height as usize;
+    {
+        let _span = crate::profile::span("ui::ensure_projection");
+        app.state.ensure_projection(&app.tree, &app.query);
+    }
+    let _span = crate::profile::span("ui::widget_render");
     let columns = columns();
     let widget = TreeListView::new(&app.tree, &app.query, &Label, &columns, style());
     widget.render(area, buf, &mut app.state);
@@ -94,5 +105,30 @@ mod tests {
         assert!(text.contains("inner.txt"), "missing inner.txt in:\n{text}");
         assert!(text.contains("file.txt"), "missing file.txt in:\n{text}");
         assert_eq!(app.page_height, 10);
+    }
+
+    /// Guards against the virtual-canvas regression: a mis-sized column made
+    /// the widget allocate and render a 65k-cell-wide buffer per frame
+    /// (~10ms). 100 draws must stay far under that regime's ~1s.
+    #[test]
+    fn repeated_draws_are_fast() {
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..30 {
+            std::fs::write(dir.path().join(format!("file-{i:02}.txt")), "").unwrap();
+        }
+        let tree = FsTree::scan(dir.path(), false).unwrap();
+        let mut app = App::new(tree, &Config::default(), Some(ExpandSpec::All));
+        let area = Rect::new(0, 0, 120, 40);
+        let mut buf = Buffer::empty(area);
+        draw(&mut app, area, &mut buf); // warm-up
+        let start = std::time::Instant::now();
+        for _ in 0..100 {
+            draw(&mut app, area, &mut buf);
+        }
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_millis(500),
+            "100 draws took {elapsed:?}"
+        );
     }
 }

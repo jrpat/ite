@@ -29,6 +29,7 @@ impl FsTree {
     /// Scan `dir`, honoring ignore files unless `no_ignore` is set (which also
     /// reveals hidden files).
     pub fn scan(dir: &Path, no_ignore: bool) -> std::io::Result<Self> {
+        let _span = crate::profile::span("fstree::scan");
         let root_dir = dir.canonicalize()?;
         let mut tree = Self {
             nodes: Vec::new(),

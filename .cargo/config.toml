@@ -1,0 +1,4 @@
+[alias]
+# Headless TUI profile: real pty, simulated keys, readable report.
+# Usage: cargo profile-tui [PATH] [ITERS]
+profile-tui = "run --quiet --release --example profile_driver --"

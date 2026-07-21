@@ -56,6 +56,12 @@ fn run() -> Result<ExitCode, String> {
     let outcome = event_loop(&mut app, &mut tui);
     drop(tui);
 
+    if let Some(path) = ite::profile::output_path() {
+        ite::profile::GLOBAL
+            .write_to(std::path::Path::new(path))
+            .map_err(|e| format!("cannot write profile: {e}"))?;
+    }
+
     match outcome.map_err(|e| e.to_string())? {
         Outcome::Quit => Ok(ExitCode::from(130)),
         Outcome::Print(path) => {
@@ -77,10 +83,13 @@ enum Outcome {
 
 fn event_loop(app: &mut App, tui: &mut Tui) -> std::io::Result<Outcome> {
     loop {
-        tui.terminal.draw(|frame| {
-            let area = frame.area();
-            ite::ui::draw(app, area, frame.buffer_mut());
-        })?;
+        {
+            let _span = ite::profile::span("main::frame");
+            tui.terminal.draw(|frame| {
+                let area = frame.area();
+                ite::ui::draw(app, area, frame.buffer_mut());
+            })?;
+        }
         let Event::Key(event) = crossterm::event::read()? else {
             continue;
         };

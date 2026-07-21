@@ -123,6 +123,7 @@ impl App {
 
     /// Handle a normalized key, resolving chords and the keymap.
     pub fn handle_key(&mut self, key: Key) -> Effect {
+        let _span = crate::profile::span("app::handle_key");
         let g = Key::parse("g").unwrap();
         if self.pending_g {
             self.pending_g = false;
