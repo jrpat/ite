@@ -46,6 +46,20 @@ fn columns() -> TreeColumnSet<'static, FsTree> {
     .expect("a single tree column is valid")
 }
 
+/// Compact guides with no horizontal tails: `├ • cli.rs`.
+const GLYPHS: TreeGlyphs<'static> = TreeGlyphs {
+    indent: " ",
+    branch_last: "└",
+    branch: "├",
+    vert: "│",
+    empty: " ",
+    leaf: "•",
+    expanded: "▼",
+    collapsed: "▶",
+    unloaded: "◇",
+    loading: "◌",
+};
+
 /// Style restricted to the default terminal palette: reversed-video focus,
 /// dark-gray guide lines, no border.
 fn style() -> TreeListViewStyle<'static> {
@@ -69,7 +83,8 @@ pub fn draw(app: &mut App, area: Rect, buf: &mut ratatui::buffer::Buffer) {
     }
     let _span = crate::profile::span("ui::widget_render");
     let columns = columns();
-    let widget = TreeListView::new(&app.tree, &app.query, &Label, &columns, style());
+    let widget =
+        TreeListView::new(&app.tree, &app.query, &Label, &columns, style()).glyphs(GLYPHS);
     widget.render(area, buf, &mut app.state);
 }
 
@@ -79,6 +94,47 @@ mod tests {
     use crate::cli::ExpandSpec;
     use crate::config::Config;
     use ratatui::buffer::Buffer;
+
+    fn drawn(app: &mut App, width: u16, height: u16) -> (Buffer, String) {
+        let area = Rect::new(0, 0, width, height);
+        let mut buf = Buffer::empty(area);
+        draw(app, area, &mut buf);
+        let text: String = (0..height)
+            .map(|y| {
+                (0..width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+                    + "\n"
+            })
+            .collect();
+        (buf, text)
+    }
+
+    fn fixture_app() -> (tempfile::TempDir, App) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("subdir")).unwrap();
+        std::fs::write(dir.path().join("subdir/inner.txt"), "").unwrap();
+        std::fs::write(dir.path().join("subdir/last.txt"), "").unwrap();
+        std::fs::write(dir.path().join("file.txt"), "").unwrap();
+        let tree = FsTree::scan(dir.path(), false).unwrap();
+        let app = App::new(tree, &Config::default(), Some(ExpandSpec::All));
+        (dir, app)
+    }
+
+    #[test]
+    fn tree_guides_have_no_horizontal_tails() {
+        let (_d, mut app) = fixture_app();
+        let (_buf, text) = drawn(&mut app, 40, 10);
+        assert!(
+            text.contains("├ • inner.txt"),
+            "expected `├ • inner.txt` in:\n{text}"
+        );
+        assert!(
+            text.contains("└ • last.txt"),
+            "expected `└ • last.txt` in:\n{text}"
+        );
+        assert!(!text.contains('─'), "no horizontal tails in:\n{text}");
+    }
 
     #[test]
     fn renders_expanded_tree_rows() {
