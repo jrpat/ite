@@ -4,8 +4,8 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Cell, StatefulWidget};
 use tui_treelistview::{
-    ColumnDef, ColumnWidth, TreeColumnSet, TreeExpansionState, TreeGlyphs, TreeLabelPrefix,
-    TreeLabelRenderer, TreeListView, TreeListViewStyle, TreeRowContext, tree_label_line,
+    ColumnDef, ColumnWidth, TreeColumnSet, TreeGlyphs, TreeLabelPrefix, TreeLabelRenderer,
+    TreeListView, TreeListViewStyle, TreeRowContext, tree_name_cell,
 };
 
 use crate::app::App;
@@ -22,20 +22,7 @@ impl TreeLabelRenderer<FsTree> for Label {
         glyphs: &TreeGlyphs<'a>,
     ) -> Cell<'a> {
         let node = model.node(id);
-        let mut line = tree_label_line(context, TreeLabelPrefix::borrowed(&node.name), glyphs);
-        if context.level > 0 && matches!(context.node.expansion, TreeExpansionState::Leaf) {
-            // The helper separates every state glyph from the preceding guide.
-            let separator = line
-                .spans
-                .iter()
-                .position(|span| span.content == glyphs.leaf)
-                .and_then(|leaf| leaf.checked_sub(1))
-                .filter(|&index| line.spans[index].content == " ");
-            if let Some(index) = separator {
-                line.spans.remove(index);
-            }
-        }
-        let cell = Cell::from(line);
+        let cell = tree_name_cell(context, TreeLabelPrefix::borrowed(&node.name), glyphs);
         if node.is_dir {
             cell.style(
                 Style::default()
@@ -60,13 +47,13 @@ fn columns() -> TreeColumnSet<'static, FsTree> {
     .without_header()
 }
 
-/// Compact guides whose horizontal tails connect to leaf bullets: `├─• cli.rs`.
+/// One-column guides with no horizontal tails: `├ • file`, `├ ▼ dir`.
 const GLYPHS: TreeGlyphs<'static> = TreeGlyphs {
-    indent: "  ",
-    branch_last: "└─",
-    branch: "├─",
-    vert: "│ ",
-    empty: "  ",
+    indent: " ",
+    branch_last: "└",
+    branch: "├",
+    vert: "│",
+    empty: " ",
     leaf: "•",
     expanded: "▼",
     collapsed: "▶",
@@ -123,8 +110,8 @@ pub fn draw(app: &mut App, area: Rect, buf: &mut ratatui::buffer::Buffer) {
     }
     let _span = crate::profile::span("ui::widget_render");
     let columns = columns();
-    let widget = TreeListView::new(&app.tree, &app.query, &Label, &columns, style(app.palette))
-        .glyphs(GLYPHS);
+    let widget =
+        TreeListView::new(&app.tree, &app.query, &Label, &columns, style(app.palette)).glyphs(GLYPHS);
     widget.render(area, buf, &mut app.state);
 }
 
@@ -162,17 +149,18 @@ mod tests {
     }
 
     #[test]
-    fn horizontal_tree_guides_connect_to_leaf_bullets() {
+    fn tree_guides_have_no_horizontal_tails() {
         let (_d, mut app) = fixture_app();
         let (_buf, text) = drawn(&mut app, 40, 10);
         assert!(
-            text.contains("├─• inner.txt"),
-            "expected `├─• inner.txt` in:\n{text}"
+            text.contains("├ • inner.txt"),
+            "expected `├ • inner.txt` in:\n{text}"
         );
         assert!(
-            text.contains("└─• last.txt"),
-            "expected `└─• last.txt` in:\n{text}"
+            text.contains("└ • last.txt"),
+            "expected `└ • last.txt` in:\n{text}"
         );
+        assert!(!text.contains('─'), "no horizontal tails in:\n{text}");
     }
 
     #[test]
@@ -223,7 +211,7 @@ mod tests {
     fn tree_guides_render_in_normal_text_color() {
         let (_d, mut app) = fixture_app();
         let (buf, text) = drawn(&mut app, 40, 10);
-        // Row 1 is `├─• inner.txt`; its guide glyph must not be recolored.
+        // Row 1 is `├ • inner.txt`; its guide glyph must not be recolored.
         assert!(text.lines().nth(1).unwrap().starts_with('├'), "{text}");
         assert_eq!(buf[(0, 1)].fg, Color::Reset, "guides use the default fg");
     }
