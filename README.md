@@ -102,6 +102,7 @@ cargo run -- ~/src     # run against a directory
 cargo test             # the test suite (fast, no terminal needed)
 cargo clippy --all-targets   # lints; the build is kept warning-free
 cargo profile-tui      # headless perf profile: real pty, simulated keys
+cargo local-bin        # release-build and install to $XDG_BIN_HOME/ite
 ```
 
 `cargo profile-tui` (a cargo alias — cargo's answer to npm scripts) spawns

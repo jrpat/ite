@@ -10,6 +10,9 @@ be piped.
 - `cargo test` — run all tests
 - `cargo clippy --all-targets` — must stay warning-free
 - `cargo run -- [PATH]` — run against a directory
+- `cargo local-bin` — release-build and install to `$XDG_BIN_HOME/ite`
+  (default `~/.local/bin/ite`); alias in `.cargo/config.toml` running
+  `examples/install.rs` (cargo aliases can't expand env vars themselves)
 - `cargo profile-tui [PATH] [ITERS]` — headless performance profile (alias in
   `.cargo/config.toml`): runs the release binary in a real PTY
   (`examples/profile_driver.rs`), answers its terminal queries, simulates
