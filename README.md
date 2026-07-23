@@ -1,19 +1,22 @@
 # ite
 
-**i**nteractive **t**ree **e**xplorer — a terminal UI for walking a directory
-tree, poking at it, and doing something useful with whatever you land on.
+**i**nteractive **t**ree **e**xplorer — a terminal UI for walking a tree,
+poking at it, and doing something useful with whatever you land on.
 
 The elevator pitch: `tree` shows you everything and scrolls off the screen;
 `ite` shows you a collapsed tree and lets you open exactly the doors you care
-about. Press enter on a file and its absolute path lands on stdout. That's the
-whole trick, and it composes beautifully:
+about. Press enter on a leaf and its selection lands on stdout. For a
+filesystem tree that is the absolute path; for a JSON document it is the
+selected node's JSON Pointer. That's the whole trick, and it composes
+beautifully:
 
 ```sh
 vim "$(ite)"          # pick a file, edit it
 cd "$(ite ~/src)"     # pick a directory (ctrl+enter), go there
+ite --json response.json  # explore a JSON document
 ```
 
-The interface draws on **stderr**, so stdout stays clean for the path. If you
+The interface draws on **stderr**, so stdout stays clean for the value. If you
 have ever piped `fzf`, you already know this dance.
 
 ## Usage
@@ -25,14 +28,38 @@ ite [OPTIONS] [PATH]
 | Flag | Meaning |
 |------|---------|
 | `PATH` | Directory to explore (default: `.`) |
+| `-j`, `--json <PATH>` | Explore a JSON file instead of a directory |
 | `-I`, `--no-ignore` | Show ignored files by disabling ignore-file rules |
-| `-e`, `--expand <N\|all>` | Start with N levels expanded (`-e 1` opens top-level dirs), or all of them |
+| `-e`, `--expand <N\|all>` | Start with N levels expanded (`-e 1` opens top-level containers), or all of them |
 | `-c`, `--config <FILE>` | Use this config instead of the user config; repeatable, later files win |
 
-By default `ite` shows dotfiles while respecting `.gitignore` and friends (it
-uses the same filesystem walker as ripgrep). `-I` also shows ignored files.
+### Filesystem
 
-Exit codes are honest: `0` means a path was printed, `130` means you quit
+By default, `ite` explores `PATH` (or `.`). It shows dotfiles while respecting
+`.gitignore` and friends. `-I` also shows ignored files.
+
+### JSON
+
+Pass `--json PATH` (or `-j PATH`) to explore one JSON document instead.
+Objects become tree branches, arrays keep their input order under indexed
+children, and scalar values are leaves:
+
+```text
+$ ite --json users.json
+▼ users [2]
+├ ▼ [0] {2} id: 12 · name: "Ada"
+│ ├ • id: 12
+│ └ • name: "Ada"
+└ • [1]: null
+```
+
+Accepting a JSON node writes its canonical JSON Pointer, such as
+`/users/0/name`; the root pointer is empty. `$path` and `$relpath` in shell
+bindings contain the same value.
+
+## Exit Codes
+
+Exit codes are honest: `0` means a value was printed, `130` means you quit
 without choosing, and a keybinding configured with `exit = true` passes its
 command's status through.
 
@@ -43,12 +70,12 @@ Navigation is vim-flavored, with arrows for the unconverted:
 | Key | Action |
 |-----|--------|
 | `j` / `↓`, `k` / `↑` | Move focus down / up, one visible line |
-| `l` / `→`, `h` / `←` | Expand / collapse a directory |
+| `l` / `→`, `h` / `←` | Expand / collapse a container |
 | `L` / `shift+→` | Expand recursively |
 | `H` / `shift+←` | Collapse recursively |
-| `enter` | Expand a collapsed directory; on a file, print its path and exit |
-| `ctrl+enter` | Print the focused path and exit, directory or not |
-| `tab` | Descend into a directory (expanding it if needed) |
+| `enter` | Expand a collapsed container; on a leaf, print its value and exit |
+| `ctrl+enter` | Print the focused value and exit, container or not |
+| `tab` | Descend into a container (expanding it if needed) |
 | `J`, `K` | Next / previous sibling, hurdling expanded subtrees |
 | `ctrl+f` / `ctrl+b` | Page down / up |
 | `ctrl+d` / `ctrl+u` | Half-page down / up |
@@ -78,8 +105,9 @@ bg = true            # run detached, without leaving the TUI (default: false)
 cmd = "expand-recursively"   # or run an ite command instead
 ```
 
-`sh` commands run via `sh -c` with two environment variables set: `$path`
-(absolute) and `$relpath` (relative to the explored root). No string
+`sh` commands run via `sh -c` with two environment variables set. For a
+filesystem tree, `$path` is absolute and `$relpath` is relative to the
+explored root. For JSON, both are the selected node's JSON Pointer. No string
 splicing, no quoting accidents — the shell expands them the way shells do.
 Without `bg`, the TUI steps aside while your command runs and returns when it
 finishes; editors work exactly as you'd hope.
@@ -131,3 +159,16 @@ wait politely, then give up. See AGENTS.md for the incantation.
 
 This repository uses [Jujutsu](https://github.com/jj-vcs/jj) (`jj commit`,
 not `git commit`).
+
+### JSON
+
+To play with a JSON sample directly from a checkout:
+
+```sh
+./examples/json-demo.sh
+./examples/json-demo.sh --expand all  # start with everything open
+```
+
+The script quietly builds the current working copy and opens
+[`examples/sample.json`](examples/sample.json). Edit that file to try your own
+shapes.

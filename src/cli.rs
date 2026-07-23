@@ -32,6 +32,10 @@ pub struct Cli {
     /// Directory to explore (defaults to the current directory).
     pub path: Option<PathBuf>,
 
+    /// JSON file to explore instead of a directory.
+    #[arg(short, long, value_name = "PATH", conflicts_with = "path")]
+    pub json: Option<PathBuf>,
+
     /// Do not respect ignore files (.gitignore etc.).
     #[arg(short = 'I', long)]
     pub no_ignore: bool,
@@ -57,6 +61,7 @@ mod tests {
     fn defaults() {
         let cli = parse(&[]);
         assert_eq!(cli.path, None);
+        assert_eq!(cli.json, None);
         assert!(!cli.no_ignore);
         assert_eq!(cli.expand, None);
         assert!(cli.config.is_empty());
@@ -65,6 +70,23 @@ mod tests {
     #[test]
     fn positional_path() {
         assert_eq!(parse(&["/some/dir"]).path, Some(PathBuf::from("/some/dir")));
+    }
+
+    #[test]
+    fn json_path_flag_and_alias() {
+        assert_eq!(
+            parse(&["--json", "data.json"]).json,
+            Some(PathBuf::from("data.json"))
+        );
+        assert_eq!(
+            parse(&["-j", "other.json"]).json,
+            Some(PathBuf::from("other.json"))
+        );
+    }
+
+    #[test]
+    fn json_and_directory_paths_are_mutually_exclusive() {
+        assert!(Cli::try_parse_from(["ite", "--json", "data.json", "/some/dir"]).is_err());
     }
 
     #[test]

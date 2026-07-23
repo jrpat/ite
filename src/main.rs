@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::io::{Write, stderr};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -17,9 +18,10 @@ use ratatui::backend::CrosstermBackend;
 use ite::app::{App, Effect};
 use ite::cli::Cli;
 use ite::config::Config;
-use ite::fstree::FsTree;
+use ite::fstree;
 use ite::keys::Key;
 use ite::runner::run_shell;
+use ite::tree::Tree;
 
 fn main() -> ExitCode {
     match run() {
@@ -44,17 +46,13 @@ fn load_config(cli: &Cli) -> Result<Config, String> {
 fn run() -> Result<ExitCode, String> {
     let cli = Cli::parse();
     let config = load_config(&cli)?;
-    let dir = cli.path.clone().unwrap_or_else(|| PathBuf::from("."));
-    if !dir.is_dir() {
-        return Err(format!("{} is not a directory", dir.display()));
-    }
-    let tree = FsTree::scan(&dir, cli.no_ignore).map_err(|e| e.to_string())?;
+    let tree = load_tree(&cli)?;
     let mut app = App::new(tree, &config, cli.expand);
     // Query before entering the alternate screen; terminals that don't answer
     // are detected quickly and leave the reverse-video fallback in place.
     app.palette = query_palette();
 
-    // The tree draws on stderr so the selected path on stdout can be piped.
+    // The tree draws on stderr so the selected value on stdout can be piped.
     let mut tui = Tui::enter().map_err(|e| e.to_string())?;
     let outcome = event_loop(&mut app, &mut tui);
     drop(tui);
@@ -68,7 +66,7 @@ fn run() -> Result<ExitCode, String> {
     match outcome.map_err(|e| e.to_string())? {
         Outcome::Quit => Ok(ExitCode::from(130)),
         Outcome::Print(path) => {
-            println!("{}", path.display());
+            println!("{}", path.to_string_lossy());
             Ok(ExitCode::SUCCESS)
         }
         Outcome::ShellExit(status) => Ok(match status.and_then(|s| s.code()) {
@@ -76,6 +74,20 @@ fn run() -> Result<ExitCode, String> {
             None => ExitCode::SUCCESS,
         }),
     }
+}
+
+fn load_tree(cli: &Cli) -> Result<Tree, String> {
+    if let Some(path) = &cli.json {
+        let file = std::fs::File::open(path)
+            .map_err(|error| format!("cannot open JSON file {}: {error}", path.display()))?;
+        return ite::json_tree::from_reader(file)
+            .map_err(|error| format!("{}: {error}", path.display()));
+    }
+    let dir = cli.path.clone().unwrap_or_else(|| PathBuf::from("."));
+    if !dir.is_dir() {
+        return Err(format!("{} is not a directory", dir.display()));
+    }
+    fstree::scan(&dir, cli.no_ignore).map_err(|e| e.to_string())
 }
 
 fn query_palette() -> Option<ite::ui::Palette> {
@@ -89,7 +101,7 @@ fn query_palette() -> Option<ite::ui::Palette> {
 
 enum Outcome {
     Quit,
-    Print(PathBuf),
+    Print(OsString),
     ShellExit(Option<std::process::ExitStatus>),
 }
 
@@ -189,5 +201,56 @@ impl Tui {
 impl Drop for Tui {
     fn drop(&mut self) {
         let _ = self.suspend();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cli(path: Option<PathBuf>) -> Cli {
+        Cli {
+            path,
+            json: None,
+            no_ignore: false,
+            expand: None,
+            config: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn json_path_is_transformed_without_using_stdin() {
+        let dir = tempfile::tempdir().unwrap();
+        let json = dir.path().join("data.json");
+        std::fs::write(&json, r#"["first", "second"]"#).unwrap();
+        let mut cli = cli(None);
+        cli.json = Some(json);
+
+        let tree = load_tree(&cli).unwrap();
+
+        assert_eq!(tree.node(tree.root_ids()[0]).name, "$ [2]");
+    }
+
+    #[test]
+    fn directory_path_scans_the_requested_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("file.txt"), "").unwrap();
+
+        let tree = load_tree(&cli(Some(dir.path().to_path_buf()))).unwrap();
+
+        assert_eq!(tree.node(tree.root_ids()[0]).name, "file.txt");
+    }
+
+    #[test]
+    fn invalid_json_file_is_an_input_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let json = dir.path().join("bad.json");
+        std::fs::write(&json, "{]").unwrap();
+        let mut cli = cli(None);
+        cli.json = Some(json.clone());
+
+        let error = load_tree(&cli).unwrap_err();
+
+        assert!(error.starts_with(&format!("{}: invalid JSON input:", json.display())));
     }
 }

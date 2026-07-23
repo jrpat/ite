@@ -2,40 +2,39 @@
 
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::Span;
 use ratatui::widgets::{Cell, StatefulWidget};
 use tui_treelistview::{
     ColumnDef, ColumnWidth, TreeColumnSet, TreeGlyphs, TreeLabelPrefix, TreeLabelRenderer,
-    TreeListView, TreeListViewStyle, TreeRowContext, tree_name_cell,
+    TreeListView, TreeListViewStyle, TreeRowContext, tree_label_line,
 };
 
 use crate::app::App;
-use crate::fstree::{FsTree, NodeId};
+use crate::tree::{NodeId, Tree};
 
 struct Label;
 
-impl TreeLabelRenderer<FsTree> for Label {
+impl TreeLabelRenderer<Tree> for Label {
     fn cell<'a>(
         &'a self,
-        model: &'a FsTree,
+        model: &'a Tree,
         id: NodeId,
         context: &TreeRowContext<'_>,
         glyphs: &TreeGlyphs<'a>,
     ) -> Cell<'a> {
         let node = model.node(id);
-        let cell = tree_name_cell(context, TreeLabelPrefix::borrowed(&node.name), glyphs);
-        if node.is_dir {
-            cell.style(
-                Style::default()
-                    .fg(Color::Blue)
-                    .add_modifier(Modifier::BOLD),
-            )
-        } else {
-            cell
+        let mut line = tree_label_line(context, TreeLabelPrefix::borrowed(&node.name), glyphs);
+        if let Some(detail) = &node.detail {
+            line.push_span(Span::styled(
+                format!(" {detail}"),
+                Style::default().fg(Color::DarkGray),
+            ));
         }
+        Cell::from(line)
     }
 }
 
-fn columns() -> TreeColumnSet<'static, FsTree> {
+fn columns() -> TreeColumnSet<'static, Tree> {
     // Note: `flexible(min, ideal)` — the ideal must stay small. A huge ideal
     // makes the widget lay out a virtual canvas of that width and render the
     // whole thing every frame (a ~300ms/frame debug-build regression).
@@ -120,6 +119,8 @@ mod tests {
     use super::*;
     use crate::cli::ExpandSpec;
     use crate::config::Config;
+    use crate::fstree;
+    use crate::tree::{ActionValues, Tree};
     use ratatui::buffer::Buffer;
 
     fn drawn(app: &mut App, width: u16, height: u16) -> (Buffer, String) {
@@ -143,7 +144,7 @@ mod tests {
         std::fs::write(dir.path().join("subdir/inner.txt"), "").unwrap();
         std::fs::write(dir.path().join("subdir/last.txt"), "").unwrap();
         std::fs::write(dir.path().join("file.txt"), "").unwrap();
-        let tree = FsTree::scan(dir.path(), false).unwrap();
+        let tree = fstree::scan(dir.path(), false).unwrap();
         let app = App::new(tree, &Config::default(), Some(ExpandSpec::All));
         (dir, app)
     }
@@ -217,12 +218,46 @@ mod tests {
     }
 
     #[test]
+    fn node_detail_uses_ansi_color_8_while_primary_text_stays_normal() {
+        let mut tree = Tree::new();
+        let root = tree.push_with_detail(
+            None,
+            "project {4}",
+            Some(r#"name: "ite" · status: "experimental""#.to_owned()),
+            true,
+            ActionValues::new("", "", ""),
+        );
+        tree.push(
+            Some(root),
+            r#"name: "ite""#,
+            false,
+            ActionValues::new("", "", ""),
+        );
+        let mut app = App::new(tree, &Config::default(), None);
+
+        let (buf, text) = drawn(&mut app, 60, 1);
+
+        assert!(
+            text.starts_with(r#"▶ project {4} name: "ite" · status: "experimental""#),
+            "{text}"
+        );
+        let primary = &buf[(2, 0)];
+        assert_eq!(primary.fg, Color::Reset);
+        assert!(!primary.modifier.contains(Modifier::BOLD));
+
+        let detail = &buf[(14, 0)];
+        assert_eq!(detail.symbol(), "n");
+        assert_eq!(detail.fg, Color::DarkGray);
+        assert!(!detail.modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
     fn renders_expanded_tree_rows() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join("subdir")).unwrap();
         std::fs::write(dir.path().join("subdir/inner.txt"), "").unwrap();
         std::fs::write(dir.path().join("file.txt"), "").unwrap();
-        let tree = FsTree::scan(dir.path(), false).unwrap();
+        let tree = fstree::scan(dir.path(), false).unwrap();
         let mut app = App::new(tree, &Config::default(), Some(ExpandSpec::All));
 
         let area = Rect::new(0, 0, 40, 10);
@@ -252,7 +287,7 @@ mod tests {
         for i in 0..30 {
             std::fs::write(dir.path().join(format!("file-{i:02}.txt")), "").unwrap();
         }
-        let tree = FsTree::scan(dir.path(), false).unwrap();
+        let tree = fstree::scan(dir.path(), false).unwrap();
         let mut app = App::new(tree, &Config::default(), Some(ExpandSpec::All));
         let area = Rect::new(0, 0, 120, 40);
         let mut buf = Buffer::empty(area);

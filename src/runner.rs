@@ -1,17 +1,17 @@
 //! Executes `sh` keybindings with `$path` / `$relpath` in the environment.
 
-use std::path::Path;
+use std::ffi::OsStr;
 use std::process::{Command, ExitStatus, Stdio};
 
-/// Run `cmd` through `sh -c`. The focused node's absolute and relative paths
-/// are exported as `$path` and `$relpath`.
+/// Run `cmd` through `sh -c`. The focused node's action values are exported as
+/// `$path` and `$relpath`.
 ///
 /// Foreground commands inherit the terminal and their exit status is returned;
 /// background commands are detached from stdio and `None` is returned.
 pub fn run_shell(
     cmd: &str,
-    path: &Path,
-    relpath: &Path,
+    path: &OsStr,
+    relpath: &OsStr,
     bg: bool,
 ) -> std::io::Result<Option<ExitStatus>> {
     let mut command = Command::new("sh");
@@ -42,8 +42,8 @@ mod tests {
         let out = dir.path().join("out");
         let status = run_shell(
             &format!("printf '%s\\n%s' \"$path\" \"$relpath\" > {}", out.display()),
-            Path::new("/abs/some/file.txt"),
-            Path::new("some/file.txt"),
+            OsStr::new("/abs/some/file.txt"),
+            OsStr::new("some/file.txt"),
             false,
         )
         .unwrap()
@@ -57,7 +57,7 @@ mod tests {
 
     #[test]
     fn foreground_reports_failure_status() {
-        let status = run_shell("exit 3", Path::new("/x"), Path::new("x"), false)
+        let status = run_shell("exit 3", OsStr::new("/x"), OsStr::new("x"), false)
             .unwrap()
             .unwrap();
         assert_eq!(status.code(), Some(3));
@@ -69,8 +69,8 @@ mod tests {
         let out = dir.path().join("out");
         let result = run_shell(
             &format!("echo \"$relpath\" > {}", out.display()),
-            Path::new("/abs/f"),
-            Path::new("f"),
+            OsStr::new("/abs/f"),
+            OsStr::new("f"),
             true,
         )
         .unwrap();

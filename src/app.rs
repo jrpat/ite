@@ -1,14 +1,14 @@
 //! Application state: focus/expansion driven by app commands and keybindings.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::ffi::OsString;
 
 use tui_treelistview::{TreeListViewState, TreeQuery};
 
 use crate::cli::ExpandSpec;
 use crate::config::{AppCommand, Binding, BindingAction, Config};
-use crate::fstree::{FsTree, NodeId};
 use crate::keys::Key;
+use crate::tree::{NodeId, Tree};
 
 /// What the event loop must do after a key is handled.
 #[derive(Clone, PartialEq, Debug)]
@@ -16,20 +16,20 @@ pub enum Effect {
     None,
     /// Exit without output.
     Quit,
-    /// The default action: print the absolute path and exit.
-    PrintAndExit(PathBuf),
+    /// The default action: print the node's source-specific value and exit.
+    PrintAndExit(OsString),
     /// Run a configured shell command on the focused node.
     RunShell {
         cmd: String,
-        path: PathBuf,
-        relpath: PathBuf,
+        path: OsString,
+        relpath: OsString,
         bg: bool,
         exit: bool,
     },
 }
 
 pub struct App {
-    pub tree: FsTree,
+    pub tree: Tree,
     pub state: TreeListViewState<NodeId>,
     pub query: TreeQuery,
     keymap: HashMap<Key, Binding>,
@@ -42,7 +42,7 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(tree: FsTree, config: &Config, expand: Option<ExpandSpec>) -> Self {
+    pub fn new(tree: Tree, config: &Config, expand: Option<ExpandSpec>) -> Self {
         let mut keymap = Self::default_keymap();
         keymap.extend(config.bindings.clone());
         let mut app = Self {
@@ -146,8 +146,8 @@ impl App {
                     None => Effect::None,
                     Some(id) => Effect::RunShell {
                         cmd,
-                        path: self.tree.node(id).path.clone(),
-                        relpath: self.tree.rel_path(id).to_path_buf(),
+                        path: self.tree.node(id).action.path.clone(),
+                        relpath: self.tree.node(id).action.relpath.clone(),
                         bg: binding.bg,
                         exit: binding.exit,
                     },
@@ -180,13 +180,13 @@ impl App {
             AppCommand::CollapseRecursively => self.set_expanded_recursively(false),
             AppCommand::Select => match self.focused_id() {
                 Some(id) if self.tree.is_leaf(id) => {
-                    return Effect::PrintAndExit(self.tree.node(id).path.clone());
+                    return Effect::PrintAndExit(self.tree.node(id).action.output.clone());
                 }
                 _ => return self.run_command(AppCommand::Expand),
             },
             AppCommand::Accept => {
                 if let Some(id) = self.focused_id() {
-                    return Effect::PrintAndExit(self.tree.node(id).path.clone());
+                    return Effect::PrintAndExit(self.tree.node(id).action.output.clone());
                 }
             }
             AppCommand::Descend => {
@@ -258,6 +258,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fstree;
 
     /// Builds:
     ///   root/
@@ -268,7 +269,7 @@ mod tests {
     ///     b/
     ///       ba.txt
     ///     c.txt
-    fn fixture() -> (tempfile::TempDir, FsTree) {
+    fn fixture() -> (tempfile::TempDir, Tree) {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path();
         std::fs::create_dir_all(p.join("a/aa")).unwrap();
@@ -277,7 +278,7 @@ mod tests {
         std::fs::create_dir(p.join("b")).unwrap();
         std::fs::write(p.join("b/ba.txt"), "").unwrap();
         std::fs::write(p.join("c.txt"), "").unwrap();
-        let tree = FsTree::scan(p, false).unwrap();
+        let tree = fstree::scan(p, false).unwrap();
         (dir, tree)
     }
 
@@ -368,8 +369,8 @@ mod tests {
         let Effect::PrintAndExit(path) = effect else {
             panic!("expected PrintAndExit, got {effect:?}");
         };
-        assert!(path.is_absolute());
-        assert!(path.ends_with("c.txt"));
+        assert!(std::path::Path::new(&path).is_absolute());
+        assert!(std::path::Path::new(&path).ends_with("c.txt"));
     }
 
     #[test]
@@ -379,7 +380,7 @@ mod tests {
         let Effect::PrintAndExit(path) = effect else {
             panic!("expected PrintAndExit, got {effect:?}");
         };
-        assert!(path.ends_with("a"));
+        assert!(std::path::Path::new(&path).ends_with("a"));
     }
 
     #[test]
@@ -481,9 +482,9 @@ mod tests {
             panic!("expected RunShell, got {effect:?}");
         };
         assert_eq!(cmd, "vim $path");
-        assert!(path.is_absolute());
-        assert!(path.ends_with("b"));
-        assert_eq!(relpath, PathBuf::from("b"));
+        assert!(std::path::Path::new(&path).is_absolute());
+        assert!(std::path::Path::new(&path).ends_with("b"));
+        assert_eq!(relpath, OsString::from("b"));
         assert!(!bg);
         assert!(exit);
     }

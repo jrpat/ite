@@ -1,0 +1,33 @@
+{
+  "project": {
+    "name": "ite",
+    "status": "experimental",
+    "features": [
+      "filesystem trees",
+      "JSON input",
+      {
+        "navigation": ["vim", "arrows"],
+        "enabled": true
+      }
+    ],
+    "metrics": {
+      "tests": 80,
+      "fast": true
+    }
+  },
+  "users": [
+    {
+      "id": 12,
+      "name": "Ada",
+      "roles": ["admin", "author"]
+    },
+    {
+      "id": 27,
+      "name": "Lin",
+      "roles": []
+    },
+    null
+  ],
+  "settings": {},
+  "version": 1
+}

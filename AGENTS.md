@@ -1,15 +1,16 @@
 # ite — interactive tree explorer
 
 A TUI for navigating a tree (by default, the file tree of a directory) and
-running actions on the focused node. The default action prints the node's
-absolute path to stdout and exits. The TUI renders on **stderr** so stdout can
-be piped.
+running actions on the focused node. `--json <PATH>` selects a JSON document
+instead. The default action prints the node's source-specific value to stdout
+and exits. The TUI renders on **stderr** so stdout can be piped.
 
 ## Commands
 
 - `cargo test` — run all tests
 - `cargo clippy --all-targets` — must stay warning-free
 - `cargo run -- [PATH]` — run against a directory
+- `cargo run -- --json <PATH>` — run against a JSON document
 - `cargo local-bin` — release-build and install to `$XDG_BIN_HOME/ite`
   (default `~/.local/bin/ite`); alias in `.cargo/config.toml` running
   `examples/install.rs` (cargo aliases can't expand env vars themselves)
@@ -39,13 +40,21 @@ be piped.
 - `src/config.rs` — TOML config: keybinding tables (`sh`/`cmd` + `exit`/`bg`
   flags) and `AppCommand` names. TOML bare keys can't contain `+`, so table
   headers like `[ctrl+e]` are preprocessed into quoted keys before parsing.
-- `src/cli.rs` — clap CLI: `[PATH]`, `-I/--no-ignore`, `-e/--expand <N|all>`,
-  repeatable `-c/--config` (suppresses the user config at
+- `src/cli.rs` — clap CLI: mutually exclusive `[PATH]` and `-j/--json <PATH>`,
+  `-I/--no-ignore`, `-e/--expand <N|all>`, repeatable `-c/--config`
+  (suppresses the user config at
   `$XDG_CONFIG_HOME/ite/config.toml`).
-- `src/fstree.rs` — `FsTree`: eager scan via `ignore::WalkBuilder`; flat node
-  arena implementing `tui_treelistview::TreeModel` (Id = `usize`, top-level
-  entries are forest roots). Dirs-first, case-insensitive sibling order.
-  Empty dirs are leaves.
+- `src/tree.rs` — source-neutral flat node arena implementing
+  `tui_treelistview::TreeModel` (Id = `usize`). Nodes carry only display,
+  hierarchy, container styling, stdout, and shell-action values. The app and
+  UI consume this type and know nothing about input formats.
+- `src/fstree.rs` — eager filesystem transform via `ignore::WalkBuilder`.
+  Top-level entries are forest roots; siblings are directories-first and
+  case-insensitively sorted. Empty directories are leaves.
+- `src/json_tree.rs` — the complete JSON boundary: parses one JSON value and
+  transforms it into `Tree`. Object members retain input order, arrays use
+  indexed children, and node output and action paths are canonical JSON
+  Pointers. No JSON values escape this module.
 - `src/app.rs` — `App`: keymap resolution (defaults + user overrides, `gg`
   chord) and `AppCommand` execution against `TreeListViewState`. Returns
   `Effect` (`Quit` / `PrintAndExit` / `RunShell`); no I/O here.
@@ -60,14 +69,14 @@ be piped.
   test.
 - `src/profile.rs` — span profiler (`Registry`, `Stats`), gated on
   `ITE_PROFILE`; the driver example reuses its `Stats`/formatting.
-- `src/main.rs` — terminal lifecycle (raw mode + alt screen on stderr,
-  best-effort kitty keyboard enhancement for `ctrl+enter`/`shift+arrow`),
-  event loop, effect execution. Exit codes: 0 selection, 130 quit,
-  foreground `exit` bindings propagate the command's status.
+- `src/main.rs` — chooses the filesystem or JSON transform from CLI options;
+  owns terminal lifecycle (raw mode + alt
+  screen on stderr, best-effort kitty keyboard enhancement for `ctrl+enter`/
+  `shift+arrow`), event loop, effect execution. Exit codes: 0 selection, 130
+  quit, foreground `exit` bindings propagate the command's status.
 
 ## Notes
 
-- Piped-in tree data is a planned feature; input format undecided.
 - Directory-specific configs are planned; mechanism undecided.
 - Manual TUI testing headlessly: `expect` scripts must answer the terminal's
   cursor-position query (`ESC[6n`) or ratatui fails at startup (see the

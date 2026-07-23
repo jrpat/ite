@@ -3,6 +3,8 @@ pub mod cli;
 pub mod config;
 pub mod fstree;
 pub mod keys;
+pub mod json_tree;
 pub mod profile;
 pub mod runner;
+pub mod tree;
 pub mod ui;
