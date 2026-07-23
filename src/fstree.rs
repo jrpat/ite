@@ -28,11 +28,13 @@ pub fn scan(dir: &Path, no_ignore: bool) -> std::io::Result<Tree> {
         let is_dir = entry.file_type().is_some_and(|t| t.is_dir());
         let parent = path.parent().and_then(|p| ids_by_path.get(p)).copied();
         let relpath = path.strip_prefix(&root_dir).unwrap_or(&path);
+        let action = ActionValues::new(path.as_os_str(), path.as_os_str(), relpath.as_os_str())
+            .with_alternate_output(entry.file_name());
         let id = tree.push(
             parent,
             entry.file_name().to_string_lossy(),
             is_dir,
-            ActionValues::new(path.as_os_str(), path.as_os_str(), relpath.as_os_str()),
+            action,
         );
         if is_dir {
             ids_by_path.insert(path, id);
@@ -143,6 +145,10 @@ mod tests {
         assert_eq!(
             tree.node(inner).action.relpath,
             Path::new("b-dir/inner.txt").as_os_str()
+        );
+        assert_eq!(
+            tree.node(inner).action.alternate_output,
+            std::ffi::OsStr::new("inner.txt")
         );
     }
 

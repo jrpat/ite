@@ -11,6 +11,8 @@ pub type NodeId = usize;
 pub struct ActionValues {
     /// Text written to stdout when the node is accepted.
     pub output: OsString,
+    /// Text written to stdout by the alternate accept action.
+    pub alternate_output: OsString,
     /// Value exported to shell bindings as `$path`.
     pub path: OsString,
     /// Value exported to shell bindings as `$relpath`.
@@ -23,11 +25,18 @@ impl ActionValues {
         path: impl Into<OsString>,
         relpath: impl Into<OsString>,
     ) -> Self {
+        let output = output.into();
         Self {
-            output: output.into(),
+            alternate_output: output.clone(),
+            output,
             path: path.into(),
             relpath: relpath.into(),
         }
+    }
+
+    pub fn with_alternate_output(mut self, output: impl Into<OsString>) -> Self {
+        self.alternate_output = output.into();
+        self
     }
 }
 

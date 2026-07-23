@@ -93,6 +93,7 @@ impl App {
             (&["H", "shift+left"], AppCommand::CollapseRecursively),
             (&["enter"], AppCommand::Select),
             (&["ctrl+enter"], AppCommand::Accept),
+            (&["alt+enter"], AppCommand::AcceptAlternate),
             (&["tab"], AppCommand::Descend),
             (&["J"], AppCommand::NextSibling),
             (&["K"], AppCommand::PrevSibling),
@@ -187,6 +188,13 @@ impl App {
             AppCommand::Accept => {
                 if let Some(id) = self.focused_id() {
                     return Effect::PrintAndExit(self.tree.node(id).action.output.clone());
+                }
+            }
+            AppCommand::AcceptAlternate => {
+                if let Some(id) = self.focused_id() {
+                    return Effect::PrintAndExit(
+                        self.tree.node(id).action.alternate_output.clone(),
+                    );
                 }
             }
             AppCommand::Descend => {
@@ -381,6 +389,16 @@ mod tests {
             panic!("expected PrintAndExit, got {effect:?}");
         };
         assert!(std::path::Path::new(&path).ends_with("a"));
+    }
+
+    #[test]
+    fn alt_enter_prints_the_filesystem_basename() {
+        let (_d, mut app) = app();
+
+        assert_eq!(
+            app.handle_key(Key::parse("alt+enter").unwrap()),
+            Effect::PrintAndExit(OsString::from("a"))
+        );
     }
 
     #[test]

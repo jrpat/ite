@@ -73,8 +73,9 @@ Navigation is vim-flavored, with arrows for the unconverted:
 | `l` / `→`, `h` / `←` | Expand / collapse a container |
 | `L` / `shift+→` | Expand recursively |
 | `H` / `shift+←` | Collapse recursively |
-| `enter` | Expand a collapsed container; on a leaf, print its value and exit |
-| `ctrl+enter` | Print the focused value and exit, container or not |
+| `enter` | Expand a collapsed container; on a leaf, print its path or JSON Pointer and exit |
+| `ctrl+enter` | Print the focused path or JSON Pointer and exit, container or not |
+| `alt+enter` | Print the focused basename or compact JSON value and exit |
 | `tab` | Descend into a container (expanding it if needed) |
 | `J`, `K` | Next / previous sibling, hurdling expanded subtrees |
 | `ctrl+f` / `ctrl+b` | Page down / up |
@@ -113,9 +114,9 @@ Without `bg`, the TUI steps aside while your command runs and returns when it
 finishes; editors work exactly as you'd hope.
 
 `cmd` accepts any built-in command: `down`, `up`, `expand`, `collapse`,
-`expand-recursively`, `collapse-recursively`, `select`, `accept`, `descend`,
-`next-sibling`, `prev-sibling`, `page-down`, `page-up`, `half-page-down`,
-`half-page-up`, `first`, `last`, `quit`.
+`expand-recursively`, `collapse-recursively`, `select`, `accept`,
+`accept-alternate`, `descend`, `next-sibling`, `prev-sibling`, `page-down`,
+`page-up`, `half-page-down`, `half-page-up`, `first`, `last`, `quit`.
 
 User bindings override the defaults, so if you bind `j` to something exotic,
 `ite` assumes you meant it.

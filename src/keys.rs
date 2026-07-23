@@ -142,6 +142,10 @@ mod tests {
             key(KeyCode::Enter, KeyModifiers::CONTROL)
         );
         assert_eq!(
+            Key::parse("alt+enter").unwrap(),
+            key(KeyCode::Enter, KeyModifiers::ALT)
+        );
+        assert_eq!(
             Key::parse("tab").unwrap(),
             key(KeyCode::Tab, KeyModifiers::NONE)
         );

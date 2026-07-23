@@ -46,15 +46,18 @@ and exits. The TUI renders on **stderr** so stdout can be piped.
   `$XDG_CONFIG_HOME/ite/config.toml`).
 - `src/tree.rs` — source-neutral flat node arena implementing
   `tui_treelistview::TreeModel` (Id = `usize`). Nodes carry only display,
-  hierarchy, container styling, stdout, and shell-action values. The app and
-  UI consume this type and know nothing about input formats.
+  hierarchy, container styling, default/alternate stdout, and shell-action
+  values. The app and UI consume this type and know nothing about input
+  formats.
 - `src/fstree.rs` — eager filesystem transform via `ignore::WalkBuilder`.
   Top-level entries are forest roots; siblings are directories-first and
-  case-insensitively sorted. Empty directories are leaves.
+  case-insensitively sorted. Empty directories are leaves; alternate output is
+  the basename.
 - `src/json_tree.rs` — the complete JSON boundary: parses one JSON value and
   transforms it into `Tree`. Object members retain input order, arrays use
-  indexed children, and node output and action paths are canonical JSON
-  Pointers. No JSON values escape this module.
+  indexed children, default output and action paths are canonical JSON
+  Pointers, and alternate output is compact JSON. No JSON values escape this
+  module.
 - `src/app.rs` — `App`: keymap resolution (defaults + user overrides, `gg`
   chord) and `AppCommand` execution against `TreeListViewState`. Returns
   `Effect` (`Quit` / `PrintAndExit` / `RunShell`); no I/O here.

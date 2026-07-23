@@ -24,6 +24,8 @@ pub enum AppCommand {
     Select,
     /// Run the default action regardless of leaf-ness.
     Accept,
+    /// Run the source-specific alternate action regardless of leaf-ness.
+    AcceptAlternate,
     /// Descend into a non-leaf, expanding it first if collapsed.
     Descend,
     /// Focus next sibling, skipping over expanded children.
@@ -57,6 +59,7 @@ impl AppCommand {
             "collapse-recursively" => Self::CollapseRecursively,
             "select" => Self::Select,
             "accept" => Self::Accept,
+            "accept-alternate" => Self::AcceptAlternate,
             "descend" => Self::Descend,
             "next-sibling" => Self::NextSibling,
             "prev-sibling" => Self::PrevSibling,
@@ -297,6 +300,7 @@ cmd = "expand-recursively"
             ("collapse-recursively", AppCommand::CollapseRecursively),
             ("select", AppCommand::Select),
             ("accept", AppCommand::Accept),
+            ("accept-alternate", AppCommand::AcceptAlternate),
             ("descend", AppCommand::Descend),
             ("next-sibling", AppCommand::NextSibling),
             ("prev-sibling", AppCommand::PrevSibling),

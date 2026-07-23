@@ -56,12 +56,16 @@ fn push_value(
     value: &Value,
 ) -> NodeId {
     let (name, detail) = label(prefix, value);
+    let alternate_output =
+        serde_json::to_string(value).expect("serializing a JSON value cannot fail");
+    let action = ActionValues::new(pointer, pointer, pointer)
+        .with_alternate_output(alternate_output);
     let id = tree.push_with_detail(
         parent,
         name,
         detail,
         matches!(value, Value::Array(_) | Value::Object(_)),
-        ActionValues::new(pointer, pointer, pointer),
+        action,
     );
 
     match value {
@@ -328,8 +332,16 @@ mod tests {
         let tilde_key = tree.node(slash_key).children[0];
 
         assert_eq!(tree.node(root).action.output, OsStr::new(""));
+        assert_eq!(
+            tree.node(root).action.alternate_output,
+            OsStr::new(r#"["rust",{"a/b":{"~key":"value"}}]"#)
+        );
         assert_eq!(tree.node(root).action.path, OsStr::new(""));
         assert_eq!(tree.node(text).action.output, OsStr::new("/0"));
+        assert_eq!(
+            tree.node(text).action.alternate_output,
+            OsStr::new(r#""rust""#)
+        );
         assert_eq!(tree.node(text).action.path, OsStr::new("/0"));
         assert_eq!(tree.node(slash_key).action.output, OsStr::new("/1/a~1b"));
         assert_eq!(tree.node(slash_key).action.path, OsStr::new("/1/a~1b"));
@@ -344,6 +356,10 @@ mod tests {
         assert_eq!(
             tree.node(tilde_key).action.output,
             OsStr::new("/1/a~1b/~0key")
+        );
+        assert_eq!(
+            tree.node(tilde_key).action.alternate_output,
+            OsStr::new(r#""value""#)
         );
     }
 
