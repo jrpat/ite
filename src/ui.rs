@@ -46,13 +46,21 @@ fn columns() -> TreeColumnSet<'static, Tree> {
     .without_header()
 }
 
-/// One-column guides with no horizontal tails: `├ • file`, `├ ▼ dir`.
+/// Guides with no horizontal tails: `├ • file`, `├ ▼ dir`.
+///
+/// The widget draws each row as `<guides><space><state-glyph> <name>`, so the
+/// disclosure triangle lands one column past the guides. To keep a child's stem
+/// directly beneath its parent's triangle, the ancestor guides (`vert`,
+/// `indent`, `empty`) are two columns wide while the branch stems (`branch`,
+/// `branch_last`) stay one column — the widget's own separator supplies the
+/// branch's second column. That extra column per ancestor is exactly what lines
+/// `│`/`├`/`└` up under the triangle they hang from.
 const GLYPHS: TreeGlyphs<'static> = TreeGlyphs {
-    indent: " ",
+    indent: "  ",
     branch_last: "└",
     branch: "├",
-    vert: "│",
-    empty: " ",
+    vert: "│ ",
+    empty: "  ",
     leaf: "•",
     expanded: "▼",
     collapsed: "▶",
@@ -276,6 +284,33 @@ mod tests {
         assert!(text.contains("inner.txt"), "missing inner.txt in:\n{text}");
         assert!(text.contains("file.txt"), "missing file.txt in:\n{text}");
         assert_eq!(app.page_height, 10);
+    }
+
+    /// A child's stem (`├`/`└`/`│`) must sit in the same column as its
+    /// parent container's triangle. With single-column guides the widget's
+    /// disclosure glyph lands one column past the guides, so deeper stems
+    /// used to drift left of the triangle they hang from.
+    #[test]
+    fn stems_align_with_parent_triangle() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("outer/inner")).unwrap();
+        std::fs::write(dir.path().join("outer/inner/deep.txt"), "").unwrap();
+        std::fs::write(dir.path().join("outer/inner/deep2.txt"), "").unwrap();
+        std::fs::write(dir.path().join("outer/sibling.txt"), "").unwrap();
+        std::fs::write(dir.path().join("zroot.txt"), "").unwrap();
+        let tree = FsTree::scan(dir.path(), false).unwrap();
+        let mut app = App::new(tree, &Config::default(), Some(ExpandSpec::All));
+        let (_buf, text) = drawn(&mut app, 40, 12);
+        let got: String = text.lines().take(6).map(|l| format!("{}\n", l.trim_end())).collect();
+        let want = "\
+▼ outer
+├ ▼ inner
+│ ├ • deep.txt
+│ └ • deep2.txt
+└ • sibling.txt
+zroot.txt
+";
+        assert_eq!(got, want, "\ngot:\n{got}\nwant:\n{want}");
     }
 
     /// Guards against the virtual-canvas regression: a mis-sized column made
