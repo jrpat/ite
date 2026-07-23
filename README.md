@@ -25,12 +25,12 @@ ite [OPTIONS] [PATH]
 | Flag | Meaning |
 |------|---------|
 | `PATH` | Directory to explore (default: `.`) |
-| `-I`, `--no-ignore` | Show everything: ignores ignore files, reveals hidden files |
+| `-I`, `--no-ignore` | Show ignored files by disabling ignore-file rules |
 | `-e`, `--expand <N\|all>` | Start with N levels expanded (`-e 1` opens top-level dirs), or all of them |
 | `-c`, `--config <FILE>` | Use this config instead of the user config; repeatable, later files win |
 
-By default `ite` respects `.gitignore` and friends (it uses the same
-filesystem walker as ripgrep) and hides dotfiles. `-I` turns all of that off.
+By default `ite` shows dotfiles while respecting `.gitignore` and friends (it
+uses the same filesystem walker as ripgrep). `-I` also shows ignored files.
 
 Exit codes are honest: `0` means a path was printed, `130` means you quit
 without choosing, and a keybinding configured with `exit = true` passes its
