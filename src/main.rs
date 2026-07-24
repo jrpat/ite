@@ -1,5 +1,5 @@
 use std::ffi::OsString;
-use std::io::{Write, stderr};
+use std::io::{IsTerminal, Write, stderr};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -76,18 +76,50 @@ fn run() -> Result<ExitCode, String> {
     }
 }
 
-fn load_tree(cli: &Cli) -> Result<Tree, String> {
+/// Where the tree comes from. Piped JSON is consumed to EOF before the TUI
+/// starts; terminal input then falls back to /dev/tty (crossterm does this
+/// whenever stdin is not a tty).
+#[derive(Debug, PartialEq, Eq)]
+enum Source {
+    Dir(PathBuf),
+    JsonFile(PathBuf),
+    JsonStdin,
+}
+
+fn choose_source(cli: &Cli, stdin_is_tty: bool) -> Result<Source, String> {
     if let Some(path) = &cli.json {
-        let file = std::fs::File::open(path)
-            .map_err(|error| format!("cannot open JSON file {}: {error}", path.display()))?;
-        return ite::json_tree::from_reader(file)
-            .map_err(|error| format!("{}: {error}", path.display()));
+        if path.as_os_str() == "-" {
+            if stdin_is_tty {
+                return Err("--json -: stdin is a terminal; pipe a JSON document in".to_string());
+            }
+            return Ok(Source::JsonStdin);
+        }
+        return Ok(Source::JsonFile(path.clone()));
     }
-    let dir = cli.path.clone().unwrap_or_else(|| PathBuf::from("."));
-    if !dir.is_dir() {
-        return Err(format!("{} is not a directory", dir.display()));
+    match &cli.path {
+        Some(path) => Ok(Source::Dir(path.clone())),
+        None if stdin_is_tty => Ok(Source::Dir(PathBuf::from("."))),
+        None => Ok(Source::JsonStdin),
     }
-    fstree::scan(&dir, cli.no_ignore).map_err(|e| e.to_string())
+}
+
+fn load_tree(cli: &Cli) -> Result<Tree, String> {
+    match choose_source(cli, std::io::stdin().is_terminal())? {
+        Source::JsonStdin => ite::json_tree::from_reader(std::io::stdin().lock())
+            .map_err(|error| format!("stdin: {error}")),
+        Source::JsonFile(path) => {
+            let file = std::fs::File::open(&path)
+                .map_err(|error| format!("cannot open JSON file {}: {error}", path.display()))?;
+            ite::json_tree::from_reader(file)
+                .map_err(|error| format!("{}: {error}", path.display()))
+        }
+        Source::Dir(dir) => {
+            if !dir.is_dir() {
+                return Err(format!("{} is not a directory", dir.display()));
+            }
+            fstree::scan(&dir, cli.no_ignore).map_err(|e| e.to_string())
+        }
+    }
 }
 
 fn query_palette() -> Option<ite::ui::Palette> {
@@ -166,28 +198,43 @@ fn handle_event(app: &mut App, event: Event) -> Effect {
 
 /// RAII terminal guard: raw mode + alternate screen on stderr, with best-effort
 /// keyboard enhancement so ctrl+enter and shift+arrows are distinguishable.
+///
+/// While active, fd 1 is pointed at stderr: crossterm writes terminal queries
+/// (the keyboard-enhancement probe) to stdout, which would otherwise vanish
+/// into the pipe this program's stdout usually feeds. `suspend` puts the real
+/// stdout back, so shell bindings and the final selection see the pipe.
 struct Tui {
     terminal: Terminal<CrosstermBackend<std::io::Stderr>>,
     enhanced: bool,
     active: bool,
+    saved_stdout: Option<std::os::fd::OwnedFd>,
 }
 
 impl Tui {
     fn enter() -> std::io::Result<Self> {
-        // Raw mode must be active before probing keyboard enhancement support,
-        // or the probe's response cannot be read reliably.
-        enable_raw_mode()?;
-        let enhanced = terminal::supports_keyboard_enhancement().unwrap_or(false);
         let mut tui = Self {
             terminal: Terminal::new(CrosstermBackend::new(stderr()))?,
-            enhanced,
+            enhanced: false,
             active: false,
+            saved_stdout: None,
         };
+        // Raw mode and the stdout swap must be in place before probing
+        // keyboard enhancement support, or the probe (or its response) is
+        // lost whenever stdout is piped.
         tui.resume()?;
+        tui.enhanced = terminal::supports_keyboard_enhancement().unwrap_or(false);
+        if tui.enhanced {
+            execute!(
+                stderr(),
+                PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+            )?;
+        }
         Ok(tui)
     }
 
     fn resume(&mut self) -> std::io::Result<()> {
+        self.saved_stdout = Some(rustix::io::dup(std::io::stdout())?);
+        rustix::stdio::dup2_stdout(stderr())?;
         enable_raw_mode()?;
         execute!(stderr(), EnterAlternateScreen, EnableMouseCapture)?;
         if self.enhanced {
@@ -197,7 +244,12 @@ impl Tui {
             )?;
         }
         self.active = true;
-        self.terminal.clear()
+        // Not Terminal::clear: that would query the cursor position, a
+        // stdout-answered round trip the terminal may never see. Entering the
+        // alternate screen already cleared it; a fresh Terminal has empty
+        // buffers, so the next draw repaints every cell.
+        self.terminal = Terminal::new(CrosstermBackend::new(stderr()))?;
+        Ok(())
     }
 
     fn suspend(&mut self) -> std::io::Result<()> {
@@ -210,6 +262,9 @@ impl Tui {
         execute!(stderr(), DisableMouseCapture, LeaveAlternateScreen)?;
         disable_raw_mode()?;
         stderr().flush()?;
+        if let Some(saved) = self.saved_stdout.take() {
+            rustix::stdio::dup2_stdout(&saved)?;
+        }
         self.active = false;
         Ok(())
     }
@@ -269,6 +324,52 @@ mod tests {
         let error = load_tree(&cli).unwrap_err();
 
         assert!(error.starts_with(&format!("{}: invalid JSON input:", json.display())));
+    }
+
+    #[test]
+    fn piped_stdin_without_a_path_selects_json_from_stdin() {
+        assert_eq!(choose_source(&cli(None), false).unwrap(), Source::JsonStdin);
+    }
+
+    #[test]
+    fn tty_stdin_without_a_path_selects_the_current_directory() {
+        assert_eq!(
+            choose_source(&cli(None), true).unwrap(),
+            Source::Dir(PathBuf::from("."))
+        );
+    }
+
+    #[test]
+    fn a_directory_path_wins_over_piped_stdin() {
+        assert_eq!(
+            choose_source(&cli(Some(PathBuf::from("/some/dir"))), false).unwrap(),
+            Source::Dir(PathBuf::from("/some/dir"))
+        );
+    }
+
+    #[test]
+    fn json_dash_selects_stdin() {
+        let mut cli = cli(None);
+        cli.json = Some(PathBuf::from("-"));
+        assert_eq!(choose_source(&cli, false).unwrap(), Source::JsonStdin);
+    }
+
+    #[test]
+    fn json_dash_with_a_tty_stdin_is_an_error() {
+        let mut cli = cli(None);
+        cli.json = Some(PathBuf::from("-"));
+        let error = choose_source(&cli, true).unwrap_err();
+        assert!(error.contains("stdin is a terminal"), "got: {error}");
+    }
+
+    #[test]
+    fn json_file_is_unaffected_by_piped_stdin() {
+        let mut cli = cli(None);
+        cli.json = Some(PathBuf::from("data.json"));
+        assert_eq!(
+            choose_source(&cli, false).unwrap(),
+            Source::JsonFile(PathBuf::from("data.json"))
+        );
     }
 
     #[test]

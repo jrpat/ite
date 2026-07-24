@@ -5,9 +5,14 @@ edition = "2024"
 
 [dependencies]
 clap = { version = "4.6.3", features = ["derive"] }
-crossterm = "0.29"
+# use-dev-tty: poll the terminal with select() instead of mio; kqueue cannot
+# watch /dev/tty on macOS, which hangs the event loop when stdin is a pipe.
+crossterm = { version = "0.29", features = ["use-dev-tty"] }
 ignore = "0.4.31"
 ratatui = "0.30.2"
+# stdio: dup2 over fd 1 while the TUI runs, so terminal queries that
+# crossterm writes to stdout reach the terminal when stdout is piped.
+rustix = { version = "1.1.4", features = ["stdio"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.149", features = ["preserve_order"] }
 terminal-colorsaurus = "1.0.3"

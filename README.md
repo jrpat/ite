@@ -13,7 +13,8 @@ beautifully:
 ```sh
 vim "$(ite)"          # pick a file, edit it
 cd "$(ite ~/src)"     # pick a directory (ctrl+enter), go there
-ite --json response.json  # explore a JSON document
+ite --json response.json      # explore a JSON document
+curl -s api.example.com/users | ite   # pipe JSON straight in
 ```
 
 The interface draws on **stderr**, so stdout stays clean for the value. If you
@@ -28,7 +29,7 @@ ite [OPTIONS] [PATH]
 | Flag | Meaning |
 |------|---------|
 | `PATH` | Directory to explore (default: `.`) |
-| `-j`, `--json <PATH>` | Explore a JSON file instead of a directory |
+| `-j`, `--json <PATH>` | Explore a JSON file instead of a directory (`-` reads stdin) |
 | `-I`, `--no-ignore` | Show ignored files by disabling ignore-file rules |
 | `-e`, `--expand <N\|all>` | Start with N levels expanded (`-e 1` opens top-level containers), or all of them |
 | `-c`, `--config <FILE>` | Use this config instead of the user config; repeatable, later files win |
@@ -56,6 +57,19 @@ $ ite --json users.json
 Accepting a JSON node writes its canonical JSON Pointer, such as
 `/users/0/name`; the root pointer is empty. `$path` and `$relpath` in shell
 bindings contain the same value.
+
+JSON can also arrive on a pipe, `fzf`-style. When stdin is not a terminal and
+no directory is given, `ite` reads a JSON document from stdin; `--json -`
+requests the same thing explicitly. Keyboard input then comes from
+`/dev/tty`, so the interface works as usual:
+
+```sh
+curl -s api.example.com/users | ite
+kubectl get pod mypod -o json | ite --json - --expand 1
+```
+
+To explore a directory while something is piped in, name it: `producer | ite .`
+ignores the pipe and explores the filesystem.
 
 ## Exit Codes
 

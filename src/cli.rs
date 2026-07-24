@@ -32,7 +32,8 @@ pub struct Cli {
     /// Directory to explore (defaults to the current directory).
     pub path: Option<PathBuf>,
 
-    /// JSON file to explore instead of a directory.
+    /// JSON file to explore instead of a directory; `-` reads stdin.
+    /// Piped stdin with no PATH is read as JSON automatically.
     #[arg(short, long, value_name = "PATH", conflicts_with = "path")]
     pub json: Option<PathBuf>,
 

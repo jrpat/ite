@@ -2,8 +2,9 @@
 
 A TUI for navigating a tree (by default, the file tree of a directory) and
 running actions on the focused node. `--json <PATH>` selects a JSON document
-instead. The default action prints the node's source-specific value to stdout
-and exits. The TUI renders on **stderr** so stdout can be piped.
+instead; piped stdin (or `--json -`) reads the document from the pipe,
+`fzf`-style. The default action prints the node's source-specific value to
+stdout and exits. The TUI renders on **stderr** so stdout can be piped.
 
 ## Commands
 
@@ -40,9 +41,9 @@ and exits. The TUI renders on **stderr** so stdout can be piped.
 - `src/config.rs` — TOML config: keybinding tables (`sh`/`cmd` + `exit`/`bg`
   flags) and `AppCommand` names. TOML bare keys can't contain `+`, so table
   headers like `[ctrl+e]` are preprocessed into quoted keys before parsing.
-- `src/cli.rs` — clap CLI: mutually exclusive `[PATH]` and `-j/--json <PATH>`,
-  `-I/--no-ignore`, `-e/--expand <N|all>`, repeatable `-c/--config`
-  (suppresses the user config at
+- `src/cli.rs` — clap CLI: mutually exclusive `[PATH]` and `-j/--json <PATH>`
+  (`-` for stdin), `-I/--no-ignore`, `-e/--expand <N|all>`, repeatable
+  `-c/--config` (suppresses the user config at
   `$XDG_CONFIG_HOME/ite/config.toml`).
 - `src/tree.rs` — source-neutral flat node arena implementing
   `tui_treelistview::TreeModel` (Id = `usize`). Nodes carry only display,
@@ -62,7 +63,8 @@ and exits. The TUI renders on **stderr** so stdout can be piped.
   chord) and `AppCommand` execution against `TreeListViewState`. Returns
   `Effect` (`Quit` / `PrintAndExit` / `RunShell`); no I/O here.
 - `src/runner.rs` — runs `sh -c` bindings with `$path`/`$relpath` exported as
-  env vars; `bg` detaches from stdio.
+  env vars; `bg` detaches from stdio. Foreground commands get `/dev/tty` as
+  stdin when ite's own stdin was a pipe (fzf's execute behavior).
 - `src/ui.rs` — renders `TreeListView` (scrolling is built into the widget's
   state) and records the viewport height for paging commands. Beware
   `ColumnWidth::flexible(min, ideal)`: `ideal` is a layout target, not a cap —
@@ -72,11 +74,22 @@ and exits. The TUI renders on **stderr** so stdout can be piped.
   test.
 - `src/profile.rs` — span profiler (`Registry`, `Stats`), gated on
   `ITE_PROFILE`; the driver example reuses its `Stats`/formatting.
-- `src/main.rs` — chooses the filesystem or JSON transform from CLI options;
-  owns terminal lifecycle (raw mode + alt
-  screen on stderr, best-effort kitty keyboard enhancement for `ctrl+enter`/
+- `src/main.rs` — chooses the tree source (`choose_source`: an explicit
+  `--json` file or `-`, a positional directory, else piped stdin means JSON
+  and a tty stdin means `.`); owns terminal lifecycle (raw mode + alt screen
+  on stderr, best-effort kitty keyboard enhancement for `ctrl+enter`/
   `shift+arrow`), event loop, effect execution. Exit codes: 0 selection, 130
   quit, foreground `exit` bindings propagate the command's status.
+  Piped-stdin support rests on three legs (regression-tested in
+  `tests/piped_stdin.rs`): stdin is consumed to EOF before the TUI starts and
+  crossterm then reads events from `/dev/tty`; the crossterm `use-dev-tty`
+  feature makes that polling use select() because kqueue cannot watch
+  `/dev/tty` on macOS; and while the TUI is active fd 1 is dup2'd onto stderr
+  because crossterm writes terminal queries (keyboard-enhancement probe,
+  cursor position) to stdout, which would otherwise pollute the piped output
+  and stall startup. For the same reason `Tui::resume` never calls
+  `Terminal::clear` (it round-trips a cursor-position query); it rebuilds the
+  `Terminal` so fresh buffers force a full repaint.
 
 ## Notes
 

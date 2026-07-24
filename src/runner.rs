@@ -1,6 +1,7 @@
 //! Executes `sh` keybindings with `$path` / `$relpath` in the environment.
 
 use std::ffi::OsStr;
+use std::io::IsTerminal;
 use std::process::{Command, ExitStatus, Stdio};
 
 /// Run `cmd` through `sh -c`. The focused node's action values are exported as
@@ -28,6 +29,13 @@ pub fn run_shell(
             .spawn()?;
         Ok(None)
     } else {
+        // When JSON was piped in, fd 0 is an exhausted pipe; hand interactive
+        // commands the terminal instead, as fzf's execute action does.
+        if !std::io::stdin().is_terminal()
+            && let Ok(tty) = std::fs::File::open("/dev/tty")
+        {
+            command.stdin(Stdio::from(tty));
+        }
         command.status().map(Some)
     }
 }
