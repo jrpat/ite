@@ -30,6 +30,21 @@ impl TreeLabelRenderer<Tree> for Label {
             label.prefix = Some(glyphs.leaf.into());
         }
         let mut line = tree_label_line(context, label, glyphs);
+        let state_glyph = match context.node.expansion {
+            TreeExpansionState::Leaf => glyphs.leaf,
+            TreeExpansionState::Collapsed => glyphs.collapsed,
+            TreeExpansionState::Expanded | TreeExpansionState::ForcedByFilter => glyphs.expanded,
+            TreeExpansionState::Unloaded => glyphs.unloaded,
+            TreeExpansionState::Loading => glyphs.loading,
+        };
+        if let Some(state_index) = line
+            .spans
+            .iter()
+            .take(line.spans.len().saturating_sub(1))
+            .rposition(|span| span.content == state_glyph)
+        {
+            line.spans[state_index].style = context.line_style;
+        }
         if let Some(detail) = &node.detail {
             line.push_span(Span::styled(
                 format!(" {detail}"),
@@ -96,8 +111,8 @@ impl Palette {
 }
 
 /// Focus uses a translucent-looking blend of the terminal's own colors when
-/// known, and falls back to reverse video. Guide lines keep the normal text
-/// color. No border, no header.
+/// known, and falls back to reverse video. Tree chrome uses ANSI foreground
+/// color 8. No border, no header.
 fn style(palette: Option<Palette>) -> TreeListViewStyle<'static> {
     let highlight_style = match palette {
         Some(palette) => Style::default().bg(palette.focus_bg()),
@@ -105,7 +120,7 @@ fn style(palette: Option<Palette>) -> TreeListViewStyle<'static> {
     };
     TreeListViewStyle {
         highlight_style,
-        line_style: Style::default(),
+        line_style: Style::default().fg(Color::DarkGray),
         highlight_symbol: "",
         // Long names truncate at the viewport edge instead of paying for the
         // widget's off-screen virtual canvas.
@@ -305,6 +320,32 @@ mod tests {
     }
 
     #[test]
+    fn node_type_glyphs_follow_parent_stems_with_one_space() {
+        let mut tree = Tree::new();
+        let root = tree.push(None, "root", true, ActionValues::new("", "", ""));
+        let open = tree.push(Some(root), "open", true, ActionValues::new("", "", ""));
+        tree.push(Some(open), "nested", false, ActionValues::new("", "", ""));
+        let closed = tree.push(Some(root), "closed", true, ActionValues::new("", "", ""));
+        tree.push(Some(closed), "hidden", false, ActionValues::new("", "", ""));
+        tree.push(Some(root), "leaf", false, ActionValues::new("", "", ""));
+        let mut app = App::new(tree, &Config::default(), Some(ExpandSpec::All));
+        app.state.set_expanded(closed, Some(root), false);
+
+        let (_buf, text) = drawn(&mut app, 40, 10);
+        let got: Vec<_> = text.lines().take(5).map(str::trim_end).collect();
+        assert_eq!(
+            got,
+            [
+                "▼ root",
+                "├ ▼ open",
+                "│ └ • nested",
+                "├ ▶ closed",
+                "└ • leaf",
+            ]
+        );
+    }
+
+    #[test]
     fn top_level_leaves_use_the_leaf_glyph() {
         let (_d, mut app) = fixture_app();
         let (_buf, text) = drawn(&mut app, 40, 10);
@@ -361,12 +402,47 @@ mod tests {
     }
 
     #[test]
-    fn tree_guides_render_in_normal_text_color() {
-        let (_d, mut app) = fixture_app();
+    fn tree_chrome_uses_ansi_color_8() {
+        let mut tree = Tree::new();
+        let outer = tree.push(None, "outer", true, ActionValues::new("", "", ""));
+        let inner = tree.push(Some(outer), "inner", true, ActionValues::new("", "", ""));
+        tree.push(Some(inner), "first", false, ActionValues::new("", "", ""));
+        tree.push(Some(inner), "last", false, ActionValues::new("", "", ""));
+        tree.push(Some(outer), "sibling", false, ActionValues::new("", "", ""));
+        let closed = tree.push(None, "closed", true, ActionValues::new("", "", ""));
+        tree.push(Some(closed), "hidden", false, ActionValues::new("", "", ""));
+        tree.push(None, "root-leaf", false, ActionValues::new("", "", ""));
+        let mut app = App::new(tree, &Config::default(), Some(ExpandSpec::All));
+        app.state.set_expanded(closed, None, false);
+
         let (buf, text) = drawn(&mut app, 40, 10);
-        // Row 1 is `├ • inner.txt`; its guide glyph must not be recolored.
-        assert!(text.lines().nth(1).unwrap().starts_with('├'), "{text}");
-        assert_eq!(buf[(0, 1)].fg, Color::Reset, "guides use the default fg");
+        for (x, y, symbol) in [
+            (0, 0, "▼"),
+            (0, 1, "├"),
+            (2, 1, "▼"),
+            (0, 2, "│"),
+            (2, 2, "├"),
+            (4, 2, "•"),
+            (0, 3, "│"),
+            (2, 3, "└"),
+            (4, 3, "•"),
+            (0, 4, "└"),
+            (2, 4, "•"),
+            (0, 5, "▶"),
+            (0, 6, "•"),
+        ] {
+            let cell = &buf[(x, y)];
+            assert_eq!(
+                cell.symbol(),
+                symbol,
+                "unexpected tree at ({x}, {y}):\n{text}"
+            );
+            assert_eq!(
+                cell.fg,
+                Color::DarkGray,
+                "tree glyph at ({x}, {y}) should use ANSI foreground color 8"
+            );
+        }
     }
 
     #[test]
