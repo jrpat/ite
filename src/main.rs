@@ -5,8 +5,8 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use crossterm::event::{
-    Event, KeyEventKind, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
-    PushKeyboardEnhancementFlags,
+    DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind, KeyboardEnhancementFlags,
+    MouseEventKind, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -114,13 +114,7 @@ fn event_loop(app: &mut App, tui: &mut Tui) -> std::io::Result<Outcome> {
                 ite::ui::draw(app, area, frame.buffer_mut());
             })?;
         }
-        let Event::Key(event) = crossterm::event::read()? else {
-            continue;
-        };
-        if event.kind == KeyEventKind::Release {
-            continue;
-        }
-        match app.handle_key(Key::from_event(event)) {
+        match handle_event(app, crossterm::event::read()?) {
             Effect::None => {}
             Effect::Quit => return Ok(Outcome::Quit),
             Effect::PrintAndExit(path) => return Ok(Outcome::Print(path)),
@@ -144,6 +138,29 @@ fn event_loop(app: &mut App, tui: &mut Tui) -> std::io::Result<Outcome> {
                 }
             }
         }
+    }
+}
+
+const MOUSE_SCROLL_ROWS: isize = 3;
+
+fn handle_event(app: &mut App, event: Event) -> Effect {
+    match event {
+        Event::Key(event) if event.kind != KeyEventKind::Release => {
+            app.handle_key(Key::from_event(event))
+        }
+        Event::Mouse(event) => {
+            match event.kind {
+                MouseEventKind::ScrollDown => {
+                    app.state.scroll_view_by(MOUSE_SCROLL_ROWS);
+                }
+                MouseEventKind::ScrollUp => {
+                    app.state.scroll_view_by(-MOUSE_SCROLL_ROWS);
+                }
+                _ => {}
+            }
+            Effect::None
+        }
+        _ => Effect::None,
     }
 }
 
@@ -172,7 +189,7 @@ impl Tui {
 
     fn resume(&mut self) -> std::io::Result<()> {
         enable_raw_mode()?;
-        execute!(stderr(), EnterAlternateScreen)?;
+        execute!(stderr(), EnterAlternateScreen, EnableMouseCapture)?;
         if self.enhanced {
             execute!(
                 stderr(),
@@ -190,7 +207,7 @@ impl Tui {
         if self.enhanced {
             execute!(stderr(), PopKeyboardEnhancementFlags)?;
         }
-        execute!(stderr(), LeaveAlternateScreen)?;
+        execute!(stderr(), DisableMouseCapture, LeaveAlternateScreen)?;
         disable_raw_mode()?;
         stderr().flush()?;
         self.active = false;
@@ -252,5 +269,41 @@ mod tests {
         let error = load_tree(&cli).unwrap_err();
 
         assert!(error.starts_with(&format!("{}: invalid JSON input:", json.display())));
+    }
+
+    #[test]
+    fn mouse_wheel_scrolls_the_viewport_without_moving_focus() {
+        let mut tree = Tree::new();
+        for index in 0..8 {
+            tree.push(
+                None,
+                format!("row {index}"),
+                false,
+                ite::tree::ActionValues::new("", "", ""),
+            );
+        }
+        let mut app = App::new(tree, &Config::default(), None);
+        let area = ratatui::layout::Rect::new(0, 0, 20, 3);
+        let mut buffer = ratatui::buffer::Buffer::empty(area);
+        ite::ui::draw(&mut app, area, &mut buffer);
+        let focused = app.focused_id();
+
+        let effect = handle_event(
+            &mut app,
+            Event::Mouse(crossterm::event::MouseEvent {
+                kind: crossterm::event::MouseEventKind::ScrollDown,
+                column: 0,
+                row: 0,
+                modifiers: crossterm::event::KeyModifiers::NONE,
+            }),
+        );
+        ite::ui::draw(&mut app, area, &mut buffer);
+
+        assert_eq!(effect, Effect::None);
+        assert!(
+            app.state.offset() > 0,
+            "the viewport should remain scrolled after redraw"
+        );
+        assert_eq!(app.focused_id(), focused, "focus should not move");
     }
 }
