@@ -84,7 +84,8 @@ Navigation is vim-flavored, with arrows for the unconverted:
 | Key | Action |
 |-----|--------|
 | `j` / `↓`, `k` / `↑` | Move focus down / up, one visible line |
-| `l` / `→`, `h` / `←` | Expand / collapse a container |
+| `l` / `→` | Expand a collapsed container; on an expanded container, focus its first child |
+| `h` / `←` | Collapse an expanded container; otherwise focus its parent |
 | `L` / `shift+→` | Expand recursively |
 | `H` / `shift+←` | Collapse recursively |
 | `enter` | Expand a collapsed container; on a leaf, print its path or JSON Pointer and exit |

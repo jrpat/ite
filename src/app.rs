@@ -199,7 +199,12 @@ impl App {
             }
             AppCommand::Expand => {
                 if let Some(id) = self.focused_branch() {
-                    self.state.set_expanded(id, self.tree.node(id).parent, true);
+                    let parent = self.tree.node(id).parent;
+                    if self.state.node_is_expanded(id, parent) {
+                        self.state.select_id(Some(self.tree.node(id).children[0]));
+                    } else {
+                        self.state.set_expanded(id, parent, true);
+                    }
                 }
             }
             AppCommand::Collapse => {
@@ -214,12 +219,14 @@ impl App {
             }
             AppCommand::ExpandRecursively => self.set_expanded_recursively(true),
             AppCommand::CollapseRecursively => self.set_expanded_recursively(false),
-            AppCommand::Select => match self.focused_id() {
-                Some(id) if self.tree.is_leaf(id) => {
-                    return Effect::PrintAndExit(self.tree.node(id).action.output.clone());
+            AppCommand::Select => {
+                if let Some(id) = self.focused_id() {
+                    if self.tree.is_leaf(id) {
+                        return Effect::PrintAndExit(self.tree.node(id).action.output.clone());
+                    }
+                    self.state.set_expanded(id, self.tree.node(id).parent, true);
                 }
-                _ => return self.run_command(AppCommand::Expand),
-            },
+            }
             AppCommand::Accept => {
                 if let Some(id) = self.focused_id() {
                     return Effect::PrintAndExit(self.tree.node(id).action.output.clone());
@@ -368,6 +375,16 @@ mod tests {
     }
 
     #[test]
+    fn l_on_expanded_branch_descends_to_first_child() {
+        let (_d, mut app) = app();
+        app.handle_key(Key::parse("l").unwrap());
+
+        app.handle_key(Key::parse("l").unwrap());
+
+        assert_eq!(focused_name(&mut app), "aa");
+    }
+
+    #[test]
     fn expand_is_noop_on_leaf() {
         let (_d, mut app) = app();
         app.run_command(AppCommand::Last);
@@ -446,6 +463,16 @@ mod tests {
         };
         assert!(std::path::Path::new(&path).is_absolute());
         assert!(std::path::Path::new(&path).ends_with("c.txt"));
+    }
+
+    #[test]
+    fn select_does_not_descend_into_an_expanded_branch() {
+        let (_d, mut app) = app();
+        app.run_command(AppCommand::Select);
+
+        app.run_command(AppCommand::Select);
+
+        assert_eq!(focused_name(&mut app), "a");
     }
 
     #[test]
