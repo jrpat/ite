@@ -5,8 +5,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 use ratatui::widgets::{Cell, StatefulWidget};
 use tui_treelistview::{
-    ColumnDef, ColumnWidth, TreeColumnSet, TreeGlyphs, TreeLabelPrefix, TreeLabelRenderer,
-    TreeListView, TreeListViewStyle, TreeRowContext, tree_label_line,
+    ColumnDef, ColumnWidth, TreeColumnSet, TreeExpansionState, TreeGlyphs, TreeLabelPrefix,
+    TreeLabelRenderer, TreeListView, TreeListViewStyle, TreeRowContext, tree_label_line,
 };
 
 use crate::app::App;
@@ -23,7 +23,11 @@ impl TreeLabelRenderer<Tree> for Label {
         glyphs: &TreeGlyphs<'a>,
     ) -> Cell<'a> {
         let node = model.node(id);
-        let mut line = tree_label_line(context, TreeLabelPrefix::borrowed(&node.name), glyphs);
+        let mut label = TreeLabelPrefix::borrowed(&node.name);
+        if context.level == 0 && context.node.expansion == TreeExpansionState::Leaf {
+            label.prefix = Some(glyphs.leaf.into());
+        }
+        let mut line = tree_label_line(context, label, glyphs);
         if let Some(detail) = &node.detail {
             line.push_span(Span::styled(
                 format!(" {detail}"),
@@ -173,6 +177,18 @@ mod tests {
     }
 
     #[test]
+    fn top_level_leaves_use_the_leaf_glyph() {
+        let (_d, mut app) = fixture_app();
+        let (_buf, text) = drawn(&mut app, 40, 10);
+        let got: Vec<_> = text.lines().take(4).map(str::trim_end).collect();
+
+        assert_eq!(
+            got,
+            ["▼ subdir", "├ • inner.txt", "└ • last.txt", "• file.txt"]
+        );
+    }
+
+    #[test]
     fn focus_bg_blends_foreground_at_ten_percent() {
         let white_on_black = Palette {
             fg: (255, 255, 255),
@@ -298,7 +314,7 @@ mod tests {
         std::fs::write(dir.path().join("outer/inner/deep2.txt"), "").unwrap();
         std::fs::write(dir.path().join("outer/sibling.txt"), "").unwrap();
         std::fs::write(dir.path().join("zroot.txt"), "").unwrap();
-        let tree = FsTree::scan(dir.path(), false).unwrap();
+        let tree = fstree::scan(dir.path(), false).unwrap();
         let mut app = App::new(tree, &Config::default(), Some(ExpandSpec::All));
         let (_buf, text) = drawn(&mut app, 40, 12);
         let got: String = text.lines().take(6).map(|l| format!("{}\n", l.trim_end())).collect();
@@ -308,7 +324,7 @@ mod tests {
 │ ├ • deep.txt
 │ └ • deep2.txt
 └ • sibling.txt
-zroot.txt
+• zroot.txt
 ";
         assert_eq!(got, want, "\ngot:\n{got}\nwant:\n{want}");
     }
