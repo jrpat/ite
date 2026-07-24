@@ -14,7 +14,7 @@ pub enum AppCommand {
     Up,
     /// Expand the focused non-leaf.
     Expand,
-    /// Collapse the focused non-leaf.
+    /// Collapse the focused expanded branch, or focus its parent.
     Collapse,
     /// Expand the focused non-leaf recursively.
     ExpandRecursively,

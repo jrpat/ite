@@ -173,8 +173,13 @@ impl App {
                 }
             }
             AppCommand::Collapse => {
-                if let Some(id) = self.focused_branch() {
-                    self.state.set_expanded(id, self.tree.node(id).parent, false);
+                if let Some(id) = self.focused_id() {
+                    let parent = self.tree.node(id).parent;
+                    if !self.tree.is_leaf(id) && self.state.node_is_expanded(id, parent) {
+                        self.state.set_expanded(id, parent, false);
+                    } else if let Some(parent) = parent {
+                        self.state.select_id(Some(parent));
+                    }
                 }
             }
             AppCommand::ExpandRecursively => self.set_expanded_recursively(true),
@@ -344,6 +349,35 @@ mod tests {
         app.run_command(AppCommand::Expand);
         app.run_command(AppCommand::Collapse);
         assert_eq!(app.visible_names(), ["a", "b", "c.txt"]);
+    }
+
+    #[test]
+    fn h_on_leaf_focuses_parent_without_collapsing_it() {
+        let (_d, mut app) = app();
+        app.run_command(AppCommand::Expand);
+        app.run_command(AppCommand::Down); // focus collapsed "aa"
+        app.run_command(AppCommand::Expand);
+        app.run_command(AppCommand::Down); // focus "aaa.txt"
+
+        app.handle_key(Key::parse("h").unwrap());
+
+        assert_eq!(focused_name(&mut app), "aa");
+        assert_eq!(
+            app.visible_names(),
+            ["a", "aa", "aaa.txt", "ab.txt", "b", "c.txt"]
+        );
+    }
+
+    #[test]
+    fn h_on_collapsed_branch_focuses_parent_without_collapsing_it() {
+        let (_d, mut app) = app();
+        app.run_command(AppCommand::Expand);
+        app.run_command(AppCommand::Down); // focus collapsed "aa"
+
+        app.handle_key(Key::parse("h").unwrap());
+
+        assert_eq!(focused_name(&mut app), "a");
+        assert_eq!(app.visible_names(), ["a", "aa", "ab.txt", "b", "c.txt"]);
     }
 
     #[test]
