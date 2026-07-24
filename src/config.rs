@@ -44,6 +44,8 @@ pub enum AppCommand {
     First,
     /// Go to the last visible line.
     Last,
+    /// Open the jump picker: fuzzy-find a node by path and move focus to it.
+    Jump,
     /// Exit without printing anything.
     Quit,
 }
@@ -69,6 +71,7 @@ impl AppCommand {
             "half-page-up" => Self::HalfPageUp,
             "first" => Self::First,
             "last" => Self::Last,
+            "jump" => Self::Jump,
             "quit" => Self::Quit,
             _ => return Err(format!("unknown app command: {s:?}")),
         };
@@ -310,6 +313,7 @@ cmd = "expand-recursively"
             ("half-page-up", AppCommand::HalfPageUp),
             ("first", AppCommand::First),
             ("last", AppCommand::Last),
+            ("jump", AppCommand::Jump),
             ("quit", AppCommand::Quit),
         ] {
             assert_eq!(AppCommand::parse(name).unwrap(), cmd, "{name}");

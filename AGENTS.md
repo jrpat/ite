@@ -61,7 +61,19 @@ stdout and exits. The TUI renders on **stderr** so stdout can be piped.
   module.
 - `src/app.rs` — `App`: keymap resolution (defaults + user overrides, `gg`
   chord) and `AppCommand` execution against `TreeListViewState`. Returns
-  `Effect` (`Quit` / `PrintAndExit` / `RunShell`); no I/O here.
+  `Effect` (`Quit` / `PrintAndExit` / `RunShell`); no I/O here. Holds a
+  `Mode` (`Normal` / `Jump`); a modal picker takes over key handling in
+  `handle_key` until it closes.
+- `src/jump.rs` — the `/` jump picker (`AppCommand::Jump`): a pure state
+  machine that fuzzy-matches every node's `relpath` with `nucleo-matcher` and
+  returns `Accept`/`Cancel`/`Stay`. Accept drives `select_by_id` to move focus
+  and expand ancestors. The query line is a `tui_input::Input`: non-navigation
+  keys are repackaged as crossterm events and passed to tui-input's own
+  `handle_event` (its `crossterm` feature is pinned to the same crossterm we
+  use), so cursor movement and word edits come for free without us duplicating
+  its key map; re-ranks only when the input value changes.
+  Single-threaded full-recompute scorer; incremental narrowing and parallelism
+  deliberately deferred (ADR-0001).
 - `src/runner.rs` — runs `sh -c` bindings with `$path`/`$relpath` exported as
   env vars; `bg` detaches from stdio. Foreground commands get `/dev/tty` as
   stdin when ite's own stdin was a pipe (fzf's execute behavior).
@@ -71,7 +83,8 @@ stdout and exits. The TUI renders on **stderr** so stdout can be piped.
   a huge value makes the widget render a virtual canvas that wide every frame
   (this was a ~300ms/frame debug-build regression; horizontal scroll is
   disabled for the same reason). Guarded by the `repeated_draws_are_fast`
-  test.
+  test. Also `render_jump`: draws the jump picker into any `Rect` (placement
+  via `jump_area`, the identity today), so its surface is swappable (ADR-0002).
 - `src/profile.rs` — span profiler (`Registry`, `Stats`), gated on
   `ITE_PROFILE`; the driver example reuses its `Stats`/formatting.
 - `src/main.rs` — chooses the tree source (`choose_source`: an explicit

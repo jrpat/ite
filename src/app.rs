@@ -7,6 +7,7 @@ use tui_treelistview::{TreeListViewState, TreeQuery};
 
 use crate::cli::ExpandSpec;
 use crate::config::{AppCommand, Binding, BindingAction, Config};
+use crate::jump::{Jump, JumpOutcome};
 use crate::keys::Key;
 use crate::tree::{NodeId, Tree};
 
@@ -28,10 +29,20 @@ pub enum Effect {
     },
 }
 
+/// The app's input mode. `Normal` drives the tree via the keymap; other modes
+/// take over key handling and rendering until they close. Adding a mode is a
+/// new variant plus one dispatch arm in `handle_key` and one in `ui::draw`.
+pub enum Mode {
+    Normal,
+    Jump(Jump),
+}
+
 pub struct App {
     pub tree: Tree,
     pub state: TreeListViewState<NodeId>,
     pub query: TreeQuery,
+    /// The current input mode; see [`Mode`].
+    pub mode: Mode,
     keymap: HashMap<Key, Binding>,
     /// True after a bare `g`, waiting for the second `g` of the chord.
     pending_g: bool,
@@ -49,6 +60,7 @@ impl App {
             tree,
             state: TreeListViewState::with_capacity(0),
             query: TreeQuery::new(),
+            mode: Mode::Normal,
             keymap,
             pending_g: false,
             page_height: 20,
@@ -102,6 +114,7 @@ impl App {
             (&["ctrl+d"], AppCommand::HalfPageDown),
             (&["ctrl+u"], AppCommand::HalfPageUp),
             (&["G"], AppCommand::Last),
+            (&["/"], AppCommand::Jump),
             (&["q", "esc", "ctrl+c"], AppCommand::Quit),
         ] {
             for key in keys {
@@ -128,6 +141,23 @@ impl App {
     /// Handle a normalized key, resolving chords and the keymap.
     pub fn handle_key(&mut self, key: Key) -> Effect {
         let _span = crate::profile::span("app::handle_key");
+        // A modal picker takes over key handling until it closes. Accepting
+        // moves focus (expanding ancestors); cancelling leaves focus untouched,
+        // so the user returns to exactly where they opened it.
+        if let Mode::Jump(jump) = &mut self.mode {
+            return match jump.handle_key(key) {
+                JumpOutcome::Stay => Effect::None,
+                JumpOutcome::Cancel => {
+                    self.mode = Mode::Normal;
+                    Effect::None
+                }
+                JumpOutcome::Accept(id) => {
+                    self.mode = Mode::Normal;
+                    self.state.select_by_id(&self.tree, &self.query, id);
+                    Effect::None
+                }
+            };
+        }
         let g = Key::parse("g").unwrap();
         if self.pending_g {
             self.pending_g = false;
@@ -221,6 +251,9 @@ impl App {
             }
             AppCommand::Last => {
                 self.state.select_last();
+            }
+            AppCommand::Jump => {
+                self.mode = Mode::Jump(Jump::open(&self.tree));
             }
             AppCommand::Quit => return Effect::Quit,
         }
@@ -570,5 +603,54 @@ mod tests {
             app.visible_names(),
             ["a", "aa", "aaa.txt", "ab.txt", "b", "ba.txt", "c.txt"]
         );
+    }
+
+    fn in_jump(app: &App) -> bool {
+        matches!(app.mode, Mode::Jump(_))
+    }
+
+    #[test]
+    fn slash_opens_the_jump_picker() {
+        let (_d, mut app) = app();
+        assert!(!in_jump(&app));
+        app.handle_key(Key::parse("/").unwrap());
+        assert!(in_jump(&app));
+    }
+
+    #[test]
+    fn cancelling_the_picker_leaves_focus_untouched() {
+        let (_d, mut app) = app();
+        app.run_command(AppCommand::Down); // focus "b"
+        assert_eq!(focused_name(&mut app), "b");
+        app.handle_key(Key::parse("/").unwrap());
+        app.handle_key(Key::parse("a").unwrap()); // type into the query
+        app.handle_key(Key::parse("esc").unwrap());
+        assert!(!in_jump(&app));
+        assert_eq!(focused_name(&mut app), "b");
+    }
+
+    #[test]
+    fn accepting_jumps_focus_and_expands_ancestors() {
+        let (_d, mut app) = app();
+        // Everything starts collapsed: only the top level is visible.
+        assert_eq!(app.visible_names(), ["a", "b", "c.txt"]);
+        app.handle_key(Key::parse("/").unwrap());
+        for k in ["a", "a", "a"] {
+            app.handle_key(Key::parse(k).unwrap()); // query "aaa" -> a/aa/aaa.txt
+        }
+        app.handle_key(Key::parse("enter").unwrap());
+        assert!(!in_jump(&app));
+        assert_eq!(focused_name(&mut app), "aaa.txt");
+        // The path to it was expanded so the focused node is visible.
+        assert!(app.visible_names().contains(&"aaa.txt".to_string()));
+    }
+
+    #[test]
+    fn a_user_can_rebind_jump_off_slash() {
+        let (_d, tree) = fixture();
+        let config = Config::parse("[ctrl+p]\ncmd = \"jump\"\n").unwrap();
+        let mut app = App::new(tree, &config, None);
+        app.handle_key(Key::parse("ctrl+p").unwrap());
+        assert!(in_jump(&app));
     }
 }
