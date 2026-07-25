@@ -107,7 +107,11 @@ impl Jump {
             // actually changed (cursor-only moves don't re-filter).
             _ => {
                 let event = Event::Key(KeyEvent::new(key.code, key.mods));
-                if self.input.handle_event(&event).is_some_and(|change| change.value) {
+                if self
+                    .input
+                    .handle_event(&event)
+                    .is_some_and(|change| change.value)
+                {
                     self.rank();
                 }
             }
@@ -139,7 +143,11 @@ impl Jump {
                 .collect();
             return;
         }
-        let pattern = Pattern::parse(self.input.value(), CaseMatching::Smart, Normalization::Smart);
+        let pattern = Pattern::parse(
+            self.input.value(),
+            CaseMatching::Smart,
+            Normalization::Smart,
+        );
         let mut buf = Vec::new();
         for c in &self.candidates {
             let mut indices = Vec::new();
@@ -161,7 +169,12 @@ impl Jump {
         self.results.sort_by(|a, b| {
             b.score
                 .cmp(&a.score)
-                .then_with(|| candidates[a.id].path.len().cmp(&candidates[b.id].path.len()))
+                .then_with(|| {
+                    candidates[a.id]
+                        .path
+                        .len()
+                        .cmp(&candidates[b.id].path.len())
+                })
                 .then_with(|| a.id.cmp(&b.id))
         });
     }
@@ -401,7 +414,11 @@ mod tests {
         }
         assert_eq!(j.selected(), 4);
         // Selection must be within [scroll, scroll + 2).
-        assert!(j.scroll() <= 4 && 4 < j.scroll() + 2, "scroll={}", j.scroll());
+        assert!(
+            j.scroll() <= 4 && 4 < j.scroll() + 2,
+            "scroll={}",
+            j.scroll()
+        );
     }
 
     #[test]

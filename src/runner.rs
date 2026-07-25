@@ -49,7 +49,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("out");
         let status = run_shell(
-            &format!("printf '%s\\n%s' \"$path\" \"$relpath\" > {}", out.display()),
+            &format!(
+                "printf '%s\\n%s' \"$path\" \"$relpath\" > {}",
+                out.display()
+            ),
             OsStr::new("/abs/some/file.txt"),
             OsStr::new("some/file.txt"),
             false,

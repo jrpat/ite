@@ -15,13 +15,13 @@ use crossterm::{execute, terminal};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
-use ite::app::{App, Effect};
-use ite::cli::Cli;
-use ite::config::Config;
-use ite::fstree;
-use ite::keys::Key;
-use ite::runner::run_shell;
-use ite::tree::Tree;
+use ite_cli::app::{App, Effect};
+use ite_cli::cli::Cli;
+use ite_cli::config::Config;
+use ite_cli::fstree;
+use ite_cli::keys::Key;
+use ite_cli::runner::run_shell;
+use ite_cli::tree::Tree;
 
 fn main() -> ExitCode {
     match run() {
@@ -57,8 +57,8 @@ fn run() -> Result<ExitCode, String> {
     let outcome = event_loop(&mut app, &mut tui);
     drop(tui);
 
-    if let Some(path) = ite::profile::output_path() {
-        ite::profile::GLOBAL
+    if let Some(path) = ite_cli::profile::output_path() {
+        ite_cli::profile::GLOBAL
             .write_to(std::path::Path::new(path))
             .map_err(|e| format!("cannot write profile: {e}"))?;
     }
@@ -105,12 +105,12 @@ fn choose_source(cli: &Cli, stdin_is_tty: bool) -> Result<Source, String> {
 
 fn load_tree(cli: &Cli) -> Result<Tree, String> {
     match choose_source(cli, std::io::stdin().is_terminal())? {
-        Source::JsonStdin => ite::json_tree::from_reader(std::io::stdin().lock())
+        Source::JsonStdin => ite_cli::json_tree::from_reader(std::io::stdin().lock())
             .map_err(|error| format!("stdin: {error}")),
         Source::JsonFile(path) => {
             let file = std::fs::File::open(&path)
                 .map_err(|error| format!("cannot open JSON file {}: {error}", path.display()))?;
-            ite::json_tree::from_reader(file)
+            ite_cli::json_tree::from_reader(file)
                 .map_err(|error| format!("{}: {error}", path.display()))
         }
         Source::Dir(dir) => {
@@ -122,10 +122,10 @@ fn load_tree(cli: &Cli) -> Result<Tree, String> {
     }
 }
 
-fn query_palette() -> Option<ite::ui::Palette> {
+fn query_palette() -> Option<ite_cli::ui::Palette> {
     let palette =
         terminal_colorsaurus::color_palette(terminal_colorsaurus::QueryOptions::default()).ok()?;
-    Some(ite::ui::Palette {
+    Some(ite_cli::ui::Palette {
         fg: palette.foreground.scale_to_8bit(),
         bg: palette.background.scale_to_8bit(),
     })
@@ -140,10 +140,10 @@ enum Outcome {
 fn event_loop(app: &mut App, tui: &mut Tui) -> std::io::Result<Outcome> {
     loop {
         {
-            let _span = ite::profile::span("main::frame");
+            let _span = ite_cli::profile::span("main::frame");
             tui.terminal.draw(|frame| {
                 let area = frame.area();
-                ite::ui::draw(app, area, frame.buffer_mut());
+                ite_cli::ui::draw(app, area, frame.buffer_mut());
             })?;
         }
         match handle_event(app, crossterm::event::read()?) {
@@ -380,13 +380,13 @@ mod tests {
                 None,
                 format!("row {index}"),
                 false,
-                ite::tree::ActionValues::new("", "", ""),
+                ite_cli::tree::ActionValues::new("", "", ""),
             );
         }
         let mut app = App::new(tree, &Config::default(), None);
         let area = ratatui::layout::Rect::new(0, 0, 20, 3);
         let mut buffer = ratatui::buffer::Buffer::empty(area);
-        ite::ui::draw(&mut app, area, &mut buffer);
+        ite_cli::ui::draw(&mut app, area, &mut buffer);
         let focused = app.focused_id();
 
         let effect = handle_event(
@@ -398,7 +398,7 @@ mod tests {
                 modifiers: crossterm::event::KeyModifiers::NONE,
             }),
         );
-        ite::ui::draw(&mut app, area, &mut buffer);
+        ite_cli::ui::draw(&mut app, area, &mut buffer);
 
         assert_eq!(effect, Effect::None);
         assert!(

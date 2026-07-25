@@ -1,0 +1,92 @@
+name: Publish crate
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        description: The JSON release plan emitted by dist
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  publish:
+    name: Publish ite-cli
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      CARGO_TERM_COLOR: always
+      BOOTSTRAP_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Validate release identity and retry state
+        id: preflight
+        shell: bash
+        env:
+          PLAN: ${{ inputs.plan }}
+        run: |
+          set -euo pipefail
+
+          package_name="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "ite-cli") | .name')"
+          manifest_version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "ite-cli") | .version')"
+          release_version="$(jq -r '.releases[] | select(.app_name == "ite-cli") | .app_version' <<<"$PLAN")"
+          announcement_tag="$(jq -r '.announcement_tag' <<<"$PLAN")"
+
+          test "$package_name" = "ite-cli"
+          test "$manifest_version" = "$release_version"
+          test "$announcement_tag" = "v$manifest_version"
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "$announcement_tag^{commit}")"
+
+          response="$RUNNER_TEMP/crates-io-version.json"
+          status="$(
+            curl --silent --show-error \
+              --user-agent 'ite-release-workflow (https://github.com/jrpat/ite)' \
+              --output "$response" \
+              --write-out '%{http_code}' \
+              "https://crates.io/api/v1/crates/ite-cli/$manifest_version"
+          )"
+
+          if [ "$status" = 200 ]; then
+            test "$(jq -r '.version.crate' "$response")" = "ite-cli"
+            test "$(jq -r '.version.num' "$response")" = "$manifest_version"
+            test "$(jq -r '.version.repository' "$response")" = "https://github.com/jrpat/ite"
+
+            cargo package --locked
+            crate_file="target/package/ite-cli-$manifest_version.crate"
+            local_checksum="$(shasum -a 256 "$crate_file" | cut -d ' ' -f 1)"
+            test "$local_checksum" = "$(jq -r '.version.checksum' "$response")"
+
+            echo "already-published=true" >> "$GITHUB_OUTPUT"
+          elif [ "$status" = 404 ]; then
+            echo "already-published=false" >> "$GITHUB_OUTPUT"
+          else
+            cat "$response"
+            echo "crates.io returned unexpected HTTP status $status" >&2
+            exit 1
+          fi
+
+      - name: Validate package without publishing
+        if: steps.preflight.outputs.already-published != 'true'
+        run: cargo publish --dry-run --locked
+
+      - name: Obtain a short-lived crates.io token
+        id: trusted
+        if: steps.preflight.outputs.already-published != 'true' && env.BOOTSTRAP_TOKEN == ''
+        uses: rust-lang/crates-io-auth-action@v1
+
+      - name: Publish to crates.io
+        if: steps.preflight.outputs.already-published != 'true'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ env.BOOTSTRAP_TOKEN || steps.trusted.outputs.token }}
+        run: cargo publish --locked

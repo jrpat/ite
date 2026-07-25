@@ -28,7 +28,10 @@ fn main() {
     std::fs::copy(root.join("target/release/ite"), &dest)
         .unwrap_or_else(|e| panic!("cannot install to {}: {e}", dest.display()));
 
-    let version = Command::new(&dest).arg("--version").output().expect("run installed binary");
+    let version = Command::new(&dest)
+        .arg("--version")
+        .output()
+        .expect("run installed binary");
     println!(
         "installed {} -> {}",
         String::from_utf8_lossy(&version.stdout).trim(),

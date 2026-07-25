@@ -147,8 +147,8 @@ pub fn draw(app: &mut App, area: Rect, buf: &mut Buffer) {
     }
     let _span = crate::profile::span("ui::widget_render");
     let columns = columns();
-    let widget =
-        TreeListView::new(&app.tree, &app.query, &Label, &columns, style(app.palette)).glyphs(GLYPHS);
+    let widget = TreeListView::new(&app.tree, &app.query, &Label, &columns, style(app.palette))
+        .glyphs(GLYPHS);
     widget.render(area, buf, &mut app.state);
 }
 
@@ -210,14 +210,20 @@ pub fn render_jump(jump: &mut Jump, area: Rect, buf: &mut Buffer, palette: Optio
         );
     }
 
-    let match_style = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
+    let match_style = Style::default()
+        .fg(Color::Cyan)
+        .add_modifier(Modifier::BOLD);
     let start = jump.scroll();
     let selected = jump.selected();
     let results = jump.results();
     let end = (start + rows).min(results.len());
     for (row, res) in results[start..end].iter().enumerate() {
         let y = area.y + 2 + row as u16;
-        let line = Line::from(highlight_spans(jump.path(res.id), &res.indices, match_style));
+        let line = Line::from(highlight_spans(
+            jump.path(res.id),
+            &res.indices,
+            match_style,
+        ));
         buf.set_line(area.x, y, &line, width);
         if start + row == selected {
             highlight_row(buf, area.x, y, width, palette);
@@ -283,12 +289,7 @@ mod tests {
         let mut buf = Buffer::empty(area);
         draw(app, area, &mut buf);
         let text: String = (0..height)
-            .map(|y| {
-                (0..width)
-                    .map(|x| buf[(x, y)].symbol())
-                    .collect::<String>()
-                    + "\n"
-            })
+            .map(|y| (0..width).map(|x| buf[(x, y)].symbol()).collect::<String>() + "\n")
             .collect();
         (buf, text)
     }
@@ -521,7 +522,11 @@ mod tests {
         let tree = fstree::scan(dir.path(), false).unwrap();
         let mut app = App::new(tree, &Config::default(), Some(ExpandSpec::All));
         let (_buf, text) = drawn(&mut app, 40, 12);
-        let got: String = text.lines().take(6).map(|l| format!("{}\n", l.trim_end())).collect();
+        let got: String = text
+            .lines()
+            .take(6)
+            .map(|l| format!("{}\n", l.trim_end()))
+            .collect();
         let want = "\
 ▼ outer
 ├ ▼ inner
@@ -569,7 +574,11 @@ mod tests {
         let (buf, text) = drawn(&mut app, 40, 10);
         let lines: Vec<&str> = text.lines().collect();
         // A dim `/ ` prefix (same color as the counter), then the query.
-        assert!(lines[0].starts_with("/ inner"), "prompt row: {:?}", lines[0]);
+        assert!(
+            lines[0].starts_with("/ inner"),
+            "prompt row: {:?}",
+            lines[0]
+        );
         assert_eq!(buf[(0, 0)].symbol(), "/");
         assert_eq!(buf[(0, 0)].fg, Color::DarkGray);
         // A block cursor (reverse video) sits at the caret, just past the query.
@@ -578,7 +587,11 @@ mod tests {
             "expected a block cursor after `/ inner`"
         );
         // The counter shows one match out of the four candidate nodes.
-        assert!(lines[0].trim_end().ends_with("1/4"), "counter row: {:?}", lines[0]);
+        assert!(
+            lines[0].trim_end().ends_with("1/4"),
+            "counter row: {:?}",
+            lines[0]
+        );
         // Row 1 is a full-width divider under the input.
         assert_eq!(lines[1], "─".repeat(40), "divider row: {:?}", lines[1]);
         // Results begin on row 2.

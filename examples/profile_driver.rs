@@ -10,7 +10,7 @@ use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use ite::profile::{Stats, format_duration};
+use ite_cli::profile::{Stats, format_duration};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
 /// Bytes seen from the app, updated by the reader thread.
@@ -23,7 +23,10 @@ struct Output {
 fn main() {
     let mut args = std::env::args().skip(1);
     let path = args.next().unwrap_or_else(|| ".".to_string());
-    let iters: usize = args.next().map(|s| s.parse().expect("ITERS must be a number")).unwrap_or(15);
+    let iters: usize = args
+        .next()
+        .map(|s| s.parse().expect("ITERS must be a number"))
+        .unwrap_or(15);
 
     let build = std::process::Command::new("cargo")
         .args(["build", "--release", "--bin", "ite", "-q"])
@@ -99,11 +102,24 @@ fn main() {
         std::thread::sleep(Duration::from_millis(1));
     }
     wait_quiet(&output, Duration::from_millis(150), Duration::from_secs(10));
-    println!("startup to first stable frame: {}", format_duration(startup.elapsed()));
+    println!(
+        "startup to first stable frame: {}",
+        format_duration(startup.elapsed())
+    );
     println!();
 
-    let jk: Vec<&[u8]> = [b"j", b"k"].into_iter().cycle().take(iters * 2).map(|b| b.as_slice()).collect();
-    let lh: Vec<&[u8]> = [b"l", b"h"].into_iter().cycle().take(20).map(|b| b.as_slice()).collect();
+    let jk: Vec<&[u8]> = [b"j", b"k"]
+        .into_iter()
+        .cycle()
+        .take(iters * 2)
+        .map(|b| b.as_slice())
+        .collect();
+    let lh: Vec<&[u8]> = [b"l", b"h"]
+        .into_iter()
+        .cycle()
+        .take(20)
+        .map(|b| b.as_slice())
+        .collect();
     let phases: Vec<(&str, Vec<&[u8]>)> = vec![
         ("j (down)", vec![b"j"; iters]),
         ("k (up)", vec![b"k"; iters]),
@@ -143,7 +159,10 @@ fn main() {
                 format_duration(s.max),
                 bytes_total / latencies.len().max(1) as u64,
             ),
-            None => println!("{name:<18} {:>5} {silent:>6} (no visual response)", keys.len()),
+            None => println!(
+                "{name:<18} {:>5} {silent:>6} (no visual response)",
+                keys.len()
+            ),
         }
     }
 

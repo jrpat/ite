@@ -58,8 +58,8 @@ fn push_value(
     let (name, detail) = label(prefix, value);
     let alternate_output =
         serde_json::to_string(value).expect("serializing a JSON value cannot fail");
-    let action = ActionValues::new(pointer, pointer, pointer)
-        .with_alternate_output(alternate_output);
+    let action =
+        ActionValues::new(pointer, pointer, pointer).with_alternate_output(alternate_output);
     let id = tree.push_with_detail(
         parent,
         name,

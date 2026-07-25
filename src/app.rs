@@ -273,11 +273,14 @@ impl App {
     }
 
     fn set_expanded_recursively(&mut self, expanded: bool) {
-        let Some(root) = self.focused_id() else { return };
+        let Some(root) = self.focused_id() else {
+            return;
+        };
         let mut stack = vec![root];
         while let Some(id) = stack.pop() {
             if !self.tree.is_leaf(id) {
-                self.state.set_expanded(id, self.tree.node(id).parent, expanded);
+                self.state
+                    .set_expanded(id, self.tree.node(id).parent, expanded);
                 stack.extend_from_slice(&self.tree.node(id).children);
             }
         }
@@ -619,7 +622,10 @@ mod tests {
     fn initial_expand_depth_one_expands_top_level_only() {
         let (_d, tree) = fixture();
         let mut app = App::new(tree, &Config::default(), Some(ExpandSpec::Depth(1)));
-        assert_eq!(app.visible_names(), ["a", "aa", "ab.txt", "b", "ba.txt", "c.txt"]);
+        assert_eq!(
+            app.visible_names(),
+            ["a", "aa", "ab.txt", "b", "ba.txt", "c.txt"]
+        );
     }
 
     #[test]

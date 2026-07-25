@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  workflow_call:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  stable:
+    name: Stable Rust
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Lint
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --locked
+
+      - name: Validate crates.io package
+        run: cargo publish --dry-run --locked
+
+      - name: Install packaged binary
+        env:
+          ITE_INSTALL_ROOT: ${{ runner.temp }}/ite-install
+        run: |
+          cargo install --path . --locked --root "$ITE_INSTALL_ROOT"
+          "$ITE_INSTALL_ROOT/bin/ite" --version
+          "$ITE_INSTALL_ROOT/bin/ite" --help
+
+  msrv:
+    name: Rust 1.88
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install MSRV
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.88.0
+
+      - name: Build and test at the MSRV
+        run: cargo test --locked

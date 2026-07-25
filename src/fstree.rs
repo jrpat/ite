@@ -30,12 +30,7 @@ pub fn scan(dir: &Path, no_ignore: bool) -> std::io::Result<Tree> {
         let relpath = path.strip_prefix(&root_dir).unwrap_or(&path);
         let action = ActionValues::new(path.as_os_str(), path.as_os_str(), relpath.as_os_str())
             .with_alternate_output(entry.file_name());
-        let id = tree.push(
-            parent,
-            entry.file_name().to_string_lossy(),
-            is_dir,
-            action,
-        );
+        let id = tree.push(parent, entry.file_name().to_string_lossy(), is_dir, action);
         if is_dir {
             ids_by_path.insert(path, id);
         }

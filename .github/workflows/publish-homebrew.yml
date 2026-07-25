@@ -1,0 +1,73 @@
+name: Publish Homebrew formula
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        description: The JSON release plan emitted by dist
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  publish:
+    name: Update jrpat/homebrew-ite-tap
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    env:
+      PLAN: ${{ inputs.plan }}
+    steps:
+      - name: Require a stable Ite release
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(jq -r '.announcement_is_prerelease' <<<"$PLAN")" = false
+          test "$(jq -r '.releases[] | select(.app_name == "ite-cli") | .app_version' <<<"$PLAN")" != null
+
+      - name: Check out the tap
+        uses: actions/checkout@v6
+        with:
+          repository: jrpat/homebrew-ite-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Download generated installers
+        uses: actions/download-artifact@v8
+        with:
+          name: artifacts-build-global
+          path: release-artifacts
+
+      - name: Add the Homebrew version test
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_formula="release-artifacts/ite.rb"
+          target_formula="tap/Formula/ite.rb"
+          test -f "$source_formula"
+          mkdir -p "$(dirname "$target_formula")"
+          sed '$d' "$source_formula" > "$target_formula"
+          cat >> "$target_formula" <<'RUBY'
+            test do
+              assert_match "ite #{version}", shell_output("#{bin}/ite --version")
+            end
+          end
+          RUBY
+          ruby -c "$target_formula"
+
+      - name: Commit the formula when it changed
+        working-directory: tap
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(jq -r '.releases[] | select(.app_name == "ite-cli") | .app_version' <<<"$PLAN")"
+          git config user.name "Ite release bot"
+          git config user.email "ite-release@users.noreply.github.com"
+          git add Formula/ite.rb
+          if git diff --quiet --cached -- Formula/ite.rb; then
+            echo "Formula/ite.rb already describes ite $version"
+            exit 0
+          fi
+          git commit -m "ite $version"
+          git push

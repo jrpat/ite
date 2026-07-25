@@ -1,7 +1,40 @@
 [package]
-name = "ite"
+name = "ite-cli"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.88"
+description = "Interactive terminal tree explorer for filesystems and JSON"
+license = "MIT"
+repository = "https://github.com/jrpat/ite"
+homepage = "https://github.com/jrpat/ite"
+readme = "README.md"
+keywords = ["cli", "filesystem", "json", "terminal", "tui"]
+categories = ["command-line-utilities"]
+publish = ["crates-io"]
+default-run = "ite"
+exclude = [
+    ".agents/",
+    ".cargo/",
+    ".github/",
+    ".gitignore",
+    ".jj/",
+    ".my/",
+    ".tmp/",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "CONTEXT.md",
+    "dist-workspace.toml",
+    "docs/",
+    "examples/",
+    "tests/",
+]
+
+[[bin]]
+name = "ite"
+path = "src/main.rs"
+
+[lib]
+doc = false
 
 [dependencies]
 clap = { version = "4.6.3", features = ["derive"] }
@@ -24,3 +57,8 @@ tui-treelistview = "0.2.2"
 [dev-dependencies]
 portable-pty = "0.9.0"
 tempfile = "3.27.0"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

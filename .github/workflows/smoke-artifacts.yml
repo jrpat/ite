@@ -1,0 +1,61 @@
+name: Smoke release artifacts
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        description: The JSON release plan emitted by dist
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  smoke:
+    name: Smoke ${{ join(matrix.targets, ', ') }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(inputs.plan).ci.github.artifacts_matrix }}
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container && matrix.container.image || null }}
+    permissions:
+      contents: read
+    steps:
+      - name: Download native artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: artifacts-build-local-${{ join(matrix.targets, '_') }}
+          path: target/distrib
+
+      - name: Verify archive contents and executable
+        shell: bash
+        env:
+          PLAN: ${{ inputs.plan }}
+        run: |
+          set -euo pipefail
+
+          archive="$(find target/distrib -type f -name 'ite-cli-*.tar.xz' -print -quit)"
+          test -n "$archive"
+          test -f "$archive.sha256"
+
+          archive_dir="$(dirname "$archive")"
+          archive_name="$(basename "$archive")"
+          (
+            cd "$archive_dir"
+            shasum -a 256 -c "$archive_name.sha256"
+          )
+
+          mkdir unpacked
+          tar -xJf "$archive" -C unpacked
+          test -n "$(find unpacked -type f -name CHANGELOG.md -print -quit)"
+          test -n "$(find unpacked -type f -name LICENSE -print -quit)"
+          test -n "$(find unpacked -type f -name README.md -print -quit)"
+
+          binary="$(find unpacked -type f -name ite -print -quit)"
+          test -n "$binary"
+          cp "$binary" ./ite
+          chmod +x ./ite
+
+          expected_version="$(jq -r '.releases[] | select(.app_name == "ite-cli") | .app_version' <<<"$PLAN")"
+          test "$(./ite --version)" = "ite $expected_version"
+          ./ite --help >/dev/null

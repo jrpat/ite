@@ -175,7 +175,9 @@ fn parse_binding(key: &str, table: &toml::Table) -> Result<Binding, String> {
     let action = match (sh, cmd) {
         (Some(sh), None) => BindingAction::Sh(sh),
         (None, Some(cmd)) => BindingAction::Cmd(AppCommand::parse(&cmd)?),
-        (Some(_), Some(_)) => return Err(format!("[{key}]: `sh` and `cmd` are mutually exclusive")),
+        (Some(_), Some(_)) => {
+            return Err(format!("[{key}]: `sh` and `cmd` are mutually exclusive"));
+        }
         (None, None) => return Err(format!("[{key}]: needs either `sh` or `cmd`")),
     };
     Ok(Binding {
@@ -329,6 +331,9 @@ cmd = "expand-recursively"
         std::fs::write(&p2, "[ctrl+e]\nsh = \"second\"\n").unwrap();
         let cfg = Config::load_files(&[p1, p2]).unwrap();
         let key = Key::parse("ctrl+e").unwrap();
-        assert_eq!(cfg.bindings[&key].action, BindingAction::Sh("second".into()));
+        assert_eq!(
+            cfg.bindings[&key].action,
+            BindingAction::Sh("second".into())
+        );
     }
 }
