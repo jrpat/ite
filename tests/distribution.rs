@@ -278,6 +278,30 @@ fn crates_workflow_supports_bootstrap_and_trusted_publication() {
 }
 
 #[test]
+fn crates_workflow_can_verify_trusted_publishing_without_publishing() {
+    let workflow = read(".github/workflows/publish-crates.yml");
+
+    assert_contains(&workflow, "workflow_dispatch:");
+    assert_contains(&workflow, "oidc_dry_run:");
+    assert_contains(&workflow, "verify-oidc:");
+    assert_contains(&workflow, "if: ${{ inputs.oidc_dry_run }}");
+    assert_contains(&workflow, "name: Verify crates.io OIDC");
+    assert_contains(&workflow, "environment: release");
+    assert_contains(&workflow, "id-token: write");
+    assert_contains(&workflow, "id: trusted");
+    assert_contains(&workflow, "uses: rust-lang/crates-io-auth-action@v1");
+    assert_contains(
+        &workflow,
+        "CARGO_REGISTRY_TOKEN: ${{ steps.trusted.outputs.token }}",
+    );
+    assert_contains(&workflow, "test -n \"$CARGO_REGISTRY_TOKEN\"");
+    assert_contains(
+        &workflow,
+        "if: ${{ !inputs.oidc_dry_run && inputs.plan != '' }}",
+    );
+}
+
+#[test]
 fn homebrew_workflow_is_stable_idempotent_and_tests_the_binary() {
     let workflow = read(".github/workflows/publish-homebrew.yml");
 
