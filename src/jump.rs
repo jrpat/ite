@@ -1,4 +1,5 @@
-//! The jump picker: a full-screen fuzzy finder over every node's path.
+//! The jump picker: a full-screen fuzzy finder over every node in the current
+//! tree view.
 //!
 //! Pressing `/` opens a [`Jump`] over the current tree. Typing filters a flat,
 //! score-ranked list of candidate paths; accepting one asks the app to move
@@ -16,11 +17,11 @@ use tui_input::backend::crossterm::EventHandler;
 use crate::keys::Key;
 use crate::tree::{NodeId, Tree};
 
-/// A node offered to the picker. Matched on `path` (the node's `relpath`: a
-/// root-relative path for a dir scan, a JSON Pointer for `--json`).
+/// A node path indexed by node id. `active` records whether the node belongs to
+/// the current narrowed view without breaking dense id-based lookup.
 struct Candidate {
-    id: NodeId,
     path: String,
+    active: bool,
 }
 
 /// One ranked result: the matched node, its score, and the character indices in
@@ -48,7 +49,9 @@ pub enum JumpOutcome {
 /// (selection + scroll).
 pub struct Jump {
     input: Input,
+    /// Dense by node id; inactive entries sit outside the current view root.
     candidates: Vec<Candidate>,
+    candidate_count: usize,
     results: Vec<Match>,
     /// Index into `results` of the highlighted row.
     selected: usize,
@@ -60,18 +63,23 @@ pub struct Jump {
 }
 
 impl Jump {
-    /// Open a picker over every node in `tree`, ranked for the empty query
-    /// (i.e. all candidates in tree order).
+    /// Open a picker over every node in the current tree view, ranked for the
+    /// empty query (i.e. all candidates in tree order).
     pub fn open(tree: &Tree) -> Self {
-        let candidates = (0..tree.len())
+        let candidates: Vec<_> = (0..tree.len())
             .map(|id| Candidate {
-                id,
                 path: tree.node(id).action.relpath.to_string_lossy().into_owned(),
+                active: tree.is_in_view(id),
             })
             .collect();
+        let candidate_count = candidates
+            .iter()
+            .filter(|candidate| candidate.active)
+            .count();
         let mut jump = Self {
             input: Input::default(),
             candidates,
+            candidate_count,
             results: Vec::new(),
             selected: 0,
             scroll: 0,
@@ -135,8 +143,10 @@ impl Jump {
             self.results = self
                 .candidates
                 .iter()
-                .map(|c| Match {
-                    id: c.id,
+                .enumerate()
+                .filter(|(_, candidate)| candidate.active)
+                .map(|(id, _)| Match {
+                    id,
                     score: 0,
                     indices: Vec::new(),
                 })
@@ -149,19 +159,20 @@ impl Jump {
             Normalization::Smart,
         );
         let mut buf = Vec::new();
-        for c in &self.candidates {
+        for (id, candidate) in self
+            .candidates
+            .iter()
+            .enumerate()
+            .filter(|(_, candidate)| candidate.active)
+        {
             let mut indices = Vec::new();
-            let haystack = Utf32Str::new(&c.path, &mut buf);
+            let haystack = Utf32Str::new(&candidate.path, &mut buf);
             if let Some(score) = pattern.indices(haystack, &mut self.matcher, &mut indices) {
                 // `indices` are appended per atom, unsorted; sort+dedup so the
                 // renderer can group matched runs.
                 indices.sort_unstable();
                 indices.dedup();
-                self.results.push(Match {
-                    id: c.id,
-                    score,
-                    indices,
-                });
+                self.results.push(Match { id, score, indices });
             }
         }
         // Rank: score desc, then shorter path, then tree order — deterministic.
@@ -233,9 +244,9 @@ impl Jump {
         self.results.len()
     }
 
-    /// Total number of candidates (every node).
+    /// Total number of candidates in the current tree view.
     pub fn total(&self) -> usize {
-        self.candidates.len()
+        self.candidate_count
     }
 
     /// The path text for a node id (what was matched, and what is displayed).
@@ -294,6 +305,26 @@ mod tests {
         assert_eq!(result_ids(&j), vec![0, 1, 2]);
         assert_eq!(j.total(), 3);
         assert_eq!(j.matched(), 3);
+    }
+
+    #[test]
+    fn narrowed_tree_only_offers_nodes_under_the_view_root() {
+        let mut tree = Tree::new();
+        tree.push(None, "outside", false, ActionValues::new("", "", "outside"));
+        let root = tree.push(None, "scope", true, ActionValues::new("", "", "scope"));
+        let child = tree.push(
+            Some(root),
+            "child",
+            false,
+            ActionValues::new("", "", "scope/child"),
+        );
+        tree.set_view_root(Some(root));
+
+        let jump = Jump::open(&tree);
+
+        assert_eq!(result_ids(&jump), vec![root, child]);
+        assert_eq!(jump.total(), 2);
+        assert_eq!(jump.path(child), "scope/child");
     }
 
     #[test]

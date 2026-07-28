@@ -106,12 +106,13 @@ Navigation is vim-flavored:
 | `enter` | Expand a collapsed container; on a leaf, print its path or JSON Pointer and exit |
 | `ctrl+enter` | Print the focused path or JSON Pointer and exit, container or not |
 | `alt+enter` | Print the focused basename or compact JSON value and exit |
-| `tab` | Descend into a container (expanding it if needed) |
+| `tab` / `shift+tab` | Make the focused node the root / restore the previous root |
 | `J`, `K` | Next / previous sibling, hurdling expanded subtrees |
 | `ctrl+f` / `ctrl+b` | Page down / up |
 | `ctrl+d` / `ctrl+u` | Half-page down / up |
 | `gg`, `G` | First line, last visible line |
-| `q`, `esc`, `ctrl+c` | Quit |
+| `esc` | Restore the previous root; quit from the original tree |
+| `q`, `ctrl+c` | Quit |
 
 <sub>
 Note: <tt>ctrl+enter</tt> and <tt>shift+arrow</tt> require a terminal
@@ -146,8 +147,9 @@ finishes; editors work exactly as you'd hope.
 
 `cmd` accepts any built-in command: `down`, `up`, `expand`, `collapse`,
 `expand-recursively`, `collapse-recursively`, `select`, `accept`,
-`accept-alternate`, `descend`, `next-sibling`, `prev-sibling`, `page-down`,
-`page-up`, `half-page-down`, `half-page-up`, `first`, `last`, `quit`.
+`accept-alternate`, `descend`, `root`, `pop-root`, `back`, `next-sibling`,
+`prev-sibling`, `page-down`, `page-up`, `half-page-down`, `half-page-up`,
+`first`, `last`, `jump`, `quit`.
 
 User bindings override the defaults, so if you bind `j` to something exotic,
 `ite` assumes you meant it.

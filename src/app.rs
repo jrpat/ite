@@ -44,6 +44,8 @@ pub struct App {
     /// The current input mode; see [`Mode`].
     pub mode: Mode,
     keymap: HashMap<Key, Binding>,
+    /// Temporary view roots, from the original forest to the current subtree.
+    root_history: Vec<Option<NodeId>>,
     /// True after a bare `g`, waiting for the second `g` of the chord.
     pending_g: bool,
     /// Rows per screen; the UI updates this every frame.
@@ -62,6 +64,7 @@ impl App {
             query: TreeQuery::new(),
             mode: Mode::Normal,
             keymap,
+            root_history: Vec::new(),
             pending_g: false,
             page_height: 20,
             palette: None,
@@ -106,7 +109,8 @@ impl App {
             (&["enter"], AppCommand::Select),
             (&["ctrl+enter"], AppCommand::Accept),
             (&["alt+enter"], AppCommand::AcceptAlternate),
-            (&["tab"], AppCommand::Descend),
+            (&["tab"], AppCommand::Root),
+            (&["shift+tab"], AppCommand::PopRoot),
             (&["J"], AppCommand::NextSibling),
             (&["K"], AppCommand::PrevSibling),
             (&["ctrl+f"], AppCommand::PageDown),
@@ -115,7 +119,8 @@ impl App {
             (&["ctrl+u"], AppCommand::HalfPageUp),
             (&["G"], AppCommand::Last),
             (&["/"], AppCommand::Jump),
-            (&["q", "esc", "ctrl+c"], AppCommand::Quit),
+            (&["esc"], AppCommand::Back),
+            (&["q", "ctrl+c"], AppCommand::Quit),
         ] {
             for key in keys {
                 map.insert(Key::parse(key).expect("valid default key"), cmd(action));
@@ -199,7 +204,7 @@ impl App {
             }
             AppCommand::Expand => {
                 if let Some(id) = self.focused_branch() {
-                    let parent = self.tree.node(id).parent;
+                    let parent = self.tree.view_parent(id);
                     if self.state.node_is_expanded(id, parent) {
                         self.state.select_id(Some(self.tree.node(id).children[0]));
                     } else {
@@ -209,7 +214,7 @@ impl App {
             }
             AppCommand::Collapse => {
                 if let Some(id) = self.focused_id() {
-                    let parent = self.tree.node(id).parent;
+                    let parent = self.tree.view_parent(id);
                     if !self.tree.is_leaf(id) && self.state.node_is_expanded(id, parent) {
                         self.state.set_expanded(id, parent, false);
                     } else if let Some(parent) = parent {
@@ -224,7 +229,7 @@ impl App {
                     if self.tree.is_leaf(id) {
                         return Effect::PrintAndExit(self.tree.node(id).action.output.clone());
                     }
-                    self.state.set_expanded(id, self.tree.node(id).parent, true);
+                    self.state.set_expanded(id, self.tree.view_parent(id), true);
                 }
             }
             AppCommand::Accept => {
@@ -241,10 +246,19 @@ impl App {
             }
             AppCommand::Descend => {
                 if let Some(id) = self.focused_branch() {
-                    self.state.set_expanded(id, self.tree.node(id).parent, true);
+                    self.state.set_expanded(id, self.tree.view_parent(id), true);
                     self.state.ensure_projection(&self.tree, &self.query);
                     let first_child = self.tree.node(id).children[0];
                     self.state.select_id(Some(first_child));
+                }
+            }
+            AppCommand::Root => self.push_root(),
+            AppCommand::PopRoot => {
+                self.pop_root();
+            }
+            AppCommand::Back => {
+                if !self.pop_root() {
+                    return Effect::Quit;
                 }
             }
             AppCommand::NextSibling => self.move_sibling(1),
@@ -280,14 +294,54 @@ impl App {
         while let Some(id) = stack.pop() {
             if !self.tree.is_leaf(id) {
                 self.state
-                    .set_expanded(id, self.tree.node(id).parent, expanded);
+                    .set_expanded(id, self.tree.view_parent(id), expanded);
                 stack.extend_from_slice(&self.tree.node(id).children);
             }
         }
     }
 
+    fn push_root(&mut self) {
+        let Some(id) = self.focused_id() else {
+            return;
+        };
+        if self.tree.view_root() == Some(id) {
+            return;
+        }
+
+        self.root_history.push(self.tree.view_root());
+        self.tree.set_view_root(Some(id));
+        if !self.tree.is_leaf(id) {
+            self.state.set_expanded(id, None, true);
+        }
+        self.state.ensure_projection(&self.tree, &self.query);
+        self.state.select_id(Some(id));
+    }
+
+    fn pop_root(&mut self) -> bool {
+        let Some(previous_root) = self.root_history.pop() else {
+            return false;
+        };
+        let selected = self.state.selected_id();
+
+        if let Some(current_root) = self.tree.view_root() {
+            let expanded = self.state.node_is_expanded(current_root, None);
+            self.state
+                .set_expanded(current_root, self.tree.node(current_root).parent, expanded);
+        }
+
+        self.tree.set_view_root(previous_root);
+        self.state.ensure_projection(&self.tree, &self.query);
+        if !selected.is_some_and(|id| self.state.select_by_id(&self.tree, &self.query, id)) {
+            self.state.select_first();
+        }
+        true
+    }
+
     fn move_sibling(&mut self, delta: isize) {
         let Some(id) = self.focused_id() else { return };
+        if self.tree.view_root() == Some(id) {
+            return;
+        }
         let siblings = match self.tree.node(id).parent {
             Some(parent) => self.tree.node(parent).children.as_slice(),
             None => self.tree.root_ids(),
@@ -503,6 +557,80 @@ mod tests {
         let (_d, mut app) = app();
         app.run_command(AppCommand::Descend);
         assert_eq!(focused_name(&mut app), "aa");
+    }
+
+    #[test]
+    fn tab_pushes_focused_nodes_as_view_roots_and_shift_tab_pops_them() {
+        let (_d, mut app) = app();
+
+        app.handle_key(Key::parse("tab").unwrap());
+        assert_eq!(focused_name(&mut app), "a");
+        assert_eq!(app.visible_names(), ["a", "aa", "ab.txt"]);
+
+        app.handle_key(Key::parse("l").unwrap()); // focus "aa"
+        app.handle_key(Key::parse("tab").unwrap());
+        assert_eq!(focused_name(&mut app), "aa");
+        assert_eq!(app.visible_names(), ["aa", "aaa.txt"]);
+
+        // The temporary root is a navigation boundary.
+        app.handle_key(Key::parse("h").unwrap()); // collapse root "aa"
+        assert_eq!(app.visible_names(), ["aa"]);
+        app.handle_key(Key::parse("h").unwrap()); // cannot focus parent "a"
+        assert_eq!(focused_name(&mut app), "aa");
+
+        app.handle_key(Key::parse("l").unwrap()); // expand root "aa"
+        assert_eq!(app.visible_names(), ["aa", "aaa.txt"]);
+
+        app.handle_key(Key::parse("shift+tab").unwrap());
+        assert_eq!(focused_name(&mut app), "aa");
+        assert_eq!(app.visible_names(), ["a", "aa", "aaa.txt", "ab.txt"]);
+
+        app.handle_key(Key::parse("shift+tab").unwrap());
+        assert_eq!(focused_name(&mut app), "aa");
+        assert_eq!(
+            app.visible_names(),
+            ["a", "aa", "aaa.txt", "ab.txt", "b", "c.txt"]
+        );
+
+        // There is no root before the original forest.
+        app.handle_key(Key::parse("shift+tab").unwrap());
+        assert_eq!(focused_name(&mut app), "aa");
+        assert_eq!(
+            app.visible_names(),
+            ["a", "aa", "aaa.txt", "ab.txt", "b", "c.txt"]
+        );
+    }
+
+    #[test]
+    fn tab_can_make_a_leaf_the_view_root() {
+        let (_d, mut app) = app();
+        app.run_command(AppCommand::Last);
+
+        app.handle_key(Key::parse("tab").unwrap());
+
+        assert_eq!(focused_name(&mut app), "c.txt");
+        assert_eq!(app.visible_names(), ["c.txt"]);
+    }
+
+    #[test]
+    fn escape_pops_one_root_at_a_time_then_quits() {
+        let (_d, mut app) = app();
+        app.handle_key(Key::parse("tab").unwrap()); // root "a"
+        app.handle_key(Key::parse("l").unwrap()); // focus "aa"
+        app.handle_key(Key::parse("tab").unwrap()); // root "aa"
+
+        assert_eq!(app.handle_key(Key::parse("esc").unwrap()), Effect::None);
+        assert_eq!(focused_name(&mut app), "aa");
+        assert_eq!(app.visible_names(), ["a", "aa", "aaa.txt", "ab.txt"]);
+
+        assert_eq!(app.handle_key(Key::parse("esc").unwrap()), Effect::None);
+        assert_eq!(focused_name(&mut app), "aa");
+        assert_eq!(
+            app.visible_names(),
+            ["a", "aa", "aaa.txt", "ab.txt", "b", "c.txt"]
+        );
+
+        assert_eq!(app.handle_key(Key::parse("esc").unwrap()), Effect::Quit);
     }
 
     #[test]

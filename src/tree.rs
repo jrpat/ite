@@ -58,6 +58,8 @@ pub struct Node {
 pub struct Tree {
     pub(crate) nodes: Vec<Node>,
     pub(crate) roots: Vec<NodeId>,
+    view_root: Option<NodeId>,
+    revision: TreeRevision,
 }
 
 impl Tree {
@@ -117,6 +119,43 @@ impl Tree {
         &self.roots
     }
 
+    /// The temporary root used by the tree view, if it has been narrowed.
+    pub(crate) fn view_root(&self) -> Option<NodeId> {
+        self.view_root
+    }
+
+    /// Narrow the tree model to one subtree, or restore the original forest.
+    pub(crate) fn set_view_root(&mut self, root: Option<NodeId>) {
+        if self.view_root != root {
+            self.view_root = root;
+            self.revision.advance();
+        }
+    }
+
+    /// The node's parent in the current view. A temporary root has no parent.
+    pub(crate) fn view_parent(&self, id: NodeId) -> Option<NodeId> {
+        if self.view_root == Some(id) {
+            None
+        } else {
+            self.nodes[id].parent
+        }
+    }
+
+    /// Whether a node belongs to the subtree exposed by the current view.
+    pub(crate) fn is_in_view(&self, id: NodeId) -> bool {
+        let Some(root) = self.view_root else {
+            return true;
+        };
+        let mut cursor = Some(id);
+        while let Some(current) = cursor {
+            if current == root {
+                return true;
+            }
+            cursor = self.nodes[current].parent;
+        }
+        false
+    }
+
     /// True when the node cannot be expanded.
     pub fn is_leaf(&self, id: NodeId) -> bool {
         self.nodes[id].children.is_empty()
@@ -136,7 +175,11 @@ impl TreeModel for Tree {
     type Id = NodeId;
 
     fn roots(&self) -> impl Iterator<Item = NodeId> + '_ {
-        self.roots.iter().copied()
+        self.roots
+            .iter()
+            .copied()
+            .filter(|_| self.view_root.is_none())
+            .chain(self.view_root)
     }
 
     fn children(&self, id: NodeId) -> TreeChildren<'_, NodeId> {
@@ -144,7 +187,7 @@ impl TreeModel for Tree {
     }
 
     fn revision(&self) -> TreeRevision {
-        TreeRevision::INITIAL
+        self.revision
     }
 
     fn size_hint(&self) -> usize {

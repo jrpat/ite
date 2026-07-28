@@ -16,6 +16,10 @@ impl Key {
     }
 
     fn normalized(mut self) -> Self {
+        if self.code == KeyCode::BackTab {
+            self.code = KeyCode::Tab;
+            self.mods.insert(KeyModifiers::SHIFT);
+        }
         if let KeyCode::Char(c) = self.code {
             if self.mods.contains(KeyModifiers::SHIFT) && c.is_alphabetic() {
                 self.code = KeyCode::Char(c.to_ascii_uppercase());
@@ -182,5 +186,9 @@ mod tests {
         // SHIFT is preserved for non-char keys.
         let ev = KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT);
         assert_eq!(Key::from_event(ev), Key::parse("shift+right").unwrap());
+
+        // Crossterm represents shift-tab as BackTab.
+        let ev = KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT);
+        assert_eq!(Key::from_event(ev), Key::parse("shift+tab").unwrap());
     }
 }

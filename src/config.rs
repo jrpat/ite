@@ -28,6 +28,12 @@ pub enum AppCommand {
     AcceptAlternate,
     /// Descend into a non-leaf, expanding it first if collapsed.
     Descend,
+    /// Make the focused node the root of the visible tree.
+    Root,
+    /// Restore the previous visible root.
+    PopRoot,
+    /// Restore the previous visible root, or quit at the original forest.
+    Back,
     /// Focus next sibling, skipping over expanded children.
     NextSibling,
     /// Focus previous sibling.
@@ -63,6 +69,9 @@ impl AppCommand {
             "accept" => Self::Accept,
             "accept-alternate" => Self::AcceptAlternate,
             "descend" => Self::Descend,
+            "root" => Self::Root,
+            "pop-root" => Self::PopRoot,
+            "back" => Self::Back,
             "next-sibling" => Self::NextSibling,
             "prev-sibling" => Self::PrevSibling,
             "page-down" => Self::PageDown,
@@ -307,6 +316,9 @@ cmd = "expand-recursively"
             ("accept", AppCommand::Accept),
             ("accept-alternate", AppCommand::AcceptAlternate),
             ("descend", AppCommand::Descend),
+            ("root", AppCommand::Root),
+            ("pop-root", AppCommand::PopRoot),
+            ("back", AppCommand::Back),
             ("next-sibling", AppCommand::NextSibling),
             ("prev-sibling", AppCommand::PrevSibling),
             ("page-down", AppCommand::PageDown),
