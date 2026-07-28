@@ -4,7 +4,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Cell, Paragraph, StatefulWidget, Widget};
+use ratatui::widgets::{Cell, Paragraph, Scrollbar, ScrollbarState, StatefulWidget, Widget};
 use tui_treelistview::{
     ColumnDef, ColumnWidth, TreeColumnSet, TreeExpansionState, TreeGlyphs, TreeLabelPrefix,
     TreeLabelRenderer, TreeListView, TreeListViewStyle, TreeRowContext, tree_label_line,
@@ -129,6 +129,55 @@ fn style(palette: Option<Palette>) -> TreeListViewStyle<'static> {
     }
 }
 
+/// Repaint the vertical scrollbar over the one `TreeListView` just drew.
+///
+/// `TreeListViewStyle` exposes no scrollbar knobs, so the widget always paints
+/// `Scrollbar::default()` — a `║` track and `█` thumb capped with `▲`/`▼`, all
+/// at the terminal's full default foreground, shouting over the tree beside it.
+/// It does reserve the gutter, though, so we paint our own bar into that column
+/// afterwards rather than trying to restyle its glyphs in place.
+///
+/// The geometry is the widget's own: it reserves the gutter exactly when the
+/// projection overflows the viewport (there is no header and no horizontal bar
+/// to shorten it), and drives the bar from `offset` over `len - viewport + 1`
+/// positions. Both are read back off the state it just clamped, so the two stay
+/// in agreement. A patch making this configurable upstream is on the
+/// `scrollbar-style` branch of the fork; when it lands, delete this and set
+/// `vertical_scrollbar: Some(scrollbar())` in [`style`] instead.
+fn render_scrollbar(app: &App, area: Rect, buf: &mut Buffer) {
+    let total = app.state.projection().len();
+    let viewport = area.height as usize;
+    if area.width == 0 || total <= viewport {
+        return;
+    }
+    let gutter = Rect {
+        x: area.x + area.width - 1,
+        width: 1,
+        ..area
+    };
+    let mut state = ScrollbarState::new(total - viewport + 1)
+        .position(app.state.offset())
+        .viewport_content_length(viewport);
+    scrollbar().render(gutter, buf, &mut state);
+}
+
+/// The scrollbar is chrome, so it stays quiet: ANSI color 8 at half opacity,
+/// and no arrow caps.
+///
+/// The opacity is dithered rather than blended: `▒` covers half of its cell and
+/// `░` a quarter, so the terminal's own background shows through at a fixed
+/// ratio. That keeps the bar inside the ANSI palette (no RGB, unlike the focus
+/// bar, which has no glyph to dither with) and makes it identical in terminals
+/// that never answered the OSC 10/11 query.
+fn scrollbar() -> Scrollbar<'static> {
+    Scrollbar::default()
+        .thumb_symbol("▒")
+        .track_symbol(Some("░"))
+        .begin_symbol(None)
+        .end_symbol(None)
+        .style(Style::default().fg(Color::DarkGray))
+}
+
 /// Render the current mode into `area`. In a modal picker the tree is hidden;
 /// otherwise the tree list is drawn and the viewport height recorded for paging.
 pub fn draw(app: &mut App, area: Rect, buf: &mut Buffer) {
@@ -150,6 +199,7 @@ pub fn draw(app: &mut App, area: Rect, buf: &mut Buffer) {
     let widget = TreeListView::new(&app.tree, &app.query, &Label, &columns, style(app.palette))
         .glyphs(GLYPHS);
     widget.render(area, buf, &mut app.state);
+    render_scrollbar(app, area, buf);
 }
 
 /// The jump picker's placement. Today it is the whole screen; moving it to a
@@ -536,6 +586,77 @@ mod tests {
 • zroot.txt
 ";
         assert_eq!(got, want, "\ngot:\n{got}\nwant:\n{want}");
+    }
+
+    /// The scrollbar is chrome, so it follows the same rules as the tree
+    /// guides: ANSI color 8, dithered to a half-tone, and no `▲`/`▼` caps —
+    /// rather than ratatui's default `║`/`█`/`▲`/`▼` at full brightness.
+    #[test]
+    fn scrollbar_is_dim_and_uncapped() {
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..30 {
+            std::fs::write(dir.path().join(format!("file-{i:02}.txt")), "").unwrap();
+        }
+        let tree = fstree::scan(dir.path(), false).unwrap();
+        let mut app = App::new(tree, &Config::default(), Some(ExpandSpec::All));
+
+        // 30 rows in a 10-row viewport, so the bar is drawn in the last column.
+        let (buf, text) = drawn(&mut app, 40, 10);
+        let column: Vec<&str> = (0..10).map(|y| buf[(39, y)].symbol()).collect();
+        assert!(
+            column.iter().all(|s| *s == "░" || *s == "▒"),
+            "unexpected scrollbar column {column:?} in:\n{text}"
+        );
+        assert!(column.contains(&"▒"), "no thumb drawn: {column:?}");
+        assert!(column.contains(&"░"), "no track drawn: {column:?}");
+        for y in 0..10 {
+            assert_eq!(
+                buf[(39, y)].fg,
+                Color::DarkGray,
+                "scrollbar row {y} should use ANSI foreground color 8"
+            );
+        }
+    }
+
+    /// We paint the bar into the gutter `TreeListView` reserves, deriving its
+    /// geometry from the same state the widget does. If those ever drift — a
+    /// header appearing, the reservation rule changing — the thumb stops
+    /// tracking the viewport, so pin it at both ends of the scroll range.
+    #[test]
+    fn scrollbar_thumb_tracks_the_viewport() {
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..30 {
+            std::fs::write(dir.path().join(format!("file-{i:02}.txt")), "").unwrap();
+        }
+        let tree = fstree::scan(dir.path(), false).unwrap();
+        let mut app = App::new(tree, &Config::default(), Some(ExpandSpec::All));
+
+        let (top, _) = drawn(&mut app, 40, 10);
+        assert_eq!(top[(39, 0)].symbol(), "▒", "thumb should start at the top");
+        assert_eq!(top[(39, 9)].symbol(), "░", "track should fill the bottom");
+
+        app.state.set_offset(usize::MAX);
+        let (bottom, _) = drawn(&mut app, 40, 10);
+        assert_eq!(
+            bottom[(39, 9)].symbol(),
+            "▒",
+            "thumb should reach the bottom at the last viewport"
+        );
+        assert_eq!(bottom[(39, 0)].symbol(), "░", "track should fill the top");
+    }
+
+    /// The bar appears only when the tree actually overflows its viewport.
+    #[test]
+    fn no_scrollbar_when_everything_fits() {
+        let (_d, mut app) = fixture_app();
+        let (buf, text) = drawn(&mut app, 40, 10);
+        for y in 0..10 {
+            let symbol = buf[(39, y)].symbol();
+            assert!(
+                symbol == " " || symbol.is_empty(),
+                "unexpected scrollbar cell {symbol:?} at row {y} in:\n{text}"
+            );
+        }
     }
 
     /// Guards against the virtual-canvas regression: a mis-sized column made

@@ -83,8 +83,14 @@ stdout and exits. The TUI renders on **stderr** so stdout can be piped.
   a huge value makes the widget render a virtual canvas that wide every frame
   (this was a ~300ms/frame debug-build regression; horizontal scroll is
   disabled for the same reason). Guarded by the `repeated_draws_are_fast`
-  test. Also `render_jump`: draws the jump picker into any `Rect` (placement
-  via `jump_area`, the identity today), so its surface is swappable (ADR-0002).
+  test. `render_scrollbar` repaints the vertical bar the widget drew: color 8
+  dithered to a half-tone (`▒` thumb, `░` track) with no `▲`/`▼` caps — opacity
+  by glyph coverage rather than RGB blend, so it needs no palette exception.
+  `TreeListViewStyle` exposes no scrollbar knobs, so we paint into the gutter
+  the widget reserves, deriving geometry from the same state it uses;
+  `scrollbar_thumb_tracks_the_viewport` guards that coupling. Also
+  `render_jump`: draws the jump picker into any `Rect` (placement via
+  `jump_area`, the identity today), so its surface is swappable (ADR-0002).
 - `src/profile.rs` — span profiler (`Registry`, `Stats`), gated on
   `ITE_PROFILE`; the driver example reuses its `Stats`/formatting.
 - `src/main.rs` — chooses the tree source (`choose_source`: an explicit
@@ -106,6 +112,15 @@ stdout and exits. The TUI renders on **stderr** so stdout can be piped.
 
 ## Notes
 
+- ite depends only on released crates, and must keep doing so: `cargo publish`
+  rejects path and git dependencies alike ("all dependencies must have a
+  version requirement specified"), and a `[patch.crates-io]` is stripped at
+  package time so the verification build fails on whatever the patch added.
+  That is why `render_scrollbar` repaints over the widget instead of using a
+  patched `TreeListViewStyle`. The upstream-shaped version of that patch lives
+  on the `scrollbar-style` bookmark of the fork at `~/src/_forked/tui-treelistview`
+  (jrpat/tui-treelistview); once it lands upstream and is released, drop
+  `render_scrollbar` in favour of the real `vertical_scrollbar` field.
 - Directory-specific configs are planned; mechanism undecided.
 - Manual TUI testing headlessly: `expect` scripts must answer the terminal's
   cursor-position query (`ESC[6n`) or ratatui fails at startup (see the
