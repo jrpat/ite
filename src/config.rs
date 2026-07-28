@@ -61,6 +61,9 @@ pub enum AppCommand {
     Jump,
     /// Exit without printing anything.
     Quit,
+    /// Toggle the keybinding panel. Bound to the reserved `?` key and not
+    /// nameable in config, so it has no entry in [`AppCommand::parse`].
+    ToggleKeybindingPanel,
 }
 
 impl AppCommand {
@@ -95,6 +98,36 @@ impl AppCommand {
         };
         Ok(cmd)
     }
+
+    /// The keybinding panel's description of this command.
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::Down => "Down",
+            Self::Up => "Up",
+            Self::Expand => "Expand",
+            Self::Collapse => "Collapse",
+            Self::ExpandRecursively => "Expand all",
+            Self::CollapseRecursively => "Collapse all",
+            Self::Select => "Select",
+            Self::Accept => "Accept",
+            Self::AcceptAlternate => "Accept alternate",
+            Self::Descend => "Descend",
+            Self::Root => "Root",
+            Self::PopRoot => "Previous root",
+            Self::Back => "Back",
+            Self::NextSibling => "Next sibling",
+            Self::PrevSibling => "Previous sibling",
+            Self::PageDown => "Page down",
+            Self::PageUp => "Page up",
+            Self::HalfPageDown => "Half page down",
+            Self::HalfPageUp => "Half page up",
+            Self::First => "First",
+            Self::Last => "Last",
+            Self::Jump => "Jump",
+            Self::Quit => "Quit",
+            Self::ToggleKeybindingPanel => "Shortcuts",
+        }
+    }
 }
 
 /// What a keybinding does.
@@ -109,6 +142,9 @@ pub enum BindingAction {
 #[derive(Clone, PartialEq, Debug)]
 pub struct Binding {
     pub action: BindingAction,
+    /// Optional panel description supplied by the user, stored verbatim; the
+    /// panel displays its cleaned first line.
+    pub help: Option<String>,
     /// Exit the program after running (only meaningful for `sh`).
     pub exit: bool,
     /// Run in the background without suspending the TUI.
@@ -190,6 +226,7 @@ fn quote_key_table_headers(src: &str) -> String {
 fn parse_binding(key: &str, table: &toml::Table) -> Result<Binding, String> {
     let sh = get_str(key, table, "sh")?;
     let cmd = get_str(key, table, "cmd")?;
+    let help = get_str(key, table, "help")?;
     let action = match (sh, cmd) {
         (Some(sh), None) => BindingAction::Sh(sh),
         (None, Some(cmd)) => BindingAction::Cmd(AppCommand::parse(&cmd)?),
@@ -200,6 +237,7 @@ fn parse_binding(key: &str, table: &toml::Table) -> Result<Binding, String> {
     };
     Ok(Binding {
         action,
+        help,
         exit: get_bool(key, table, "exit")?.unwrap_or(false),
         bg: get_bool(key, table, "bg")?.unwrap_or(false),
     })
@@ -267,6 +305,27 @@ cmd = "expand-recursively"
         .unwrap();
         let b = &cfg.bindings[&Key::parse("ctrl+l").unwrap()];
         assert_eq!(b.action, BindingAction::Cmd(AppCommand::ExpandRecursively));
+    }
+
+    #[test]
+    fn parses_optional_help_verbatim() {
+        // Cleaning for display is the panel's job, not the parser's.
+        let cfg = Config::parse(
+            r#"
+[ctrl+l]
+cmd = "expand-recursively"
+help = "  Custom\tCOPY\u0007\nignored"
+"#,
+        )
+        .unwrap();
+        let b = &cfg.bindings[&Key::parse("ctrl+l").unwrap()];
+        assert_eq!(b.help.as_deref(), Some("  Custom\tCOPY\u{7}\nignored"));
+    }
+
+    #[test]
+    fn help_must_be_a_string() {
+        let error = Config::parse("[x]\nsh = \"printf x\"\nhelp = true\n").unwrap_err();
+        assert!(error.contains("`help` must be a string"), "{error}");
     }
 
     #[test]

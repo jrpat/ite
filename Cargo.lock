@@ -714,6 +714,7 @@ dependencies = [
  "toml",
  "tui-input",
  "tui-treelistview",
+ "unicode-width",
 ]
 
 [[package]]

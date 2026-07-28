@@ -29,10 +29,13 @@ stdout and exits. The TUI renders on **stderr** so stdout can be piped.
   first, then make it pass.
 - This repo uses **Jujutsu**: commit with `jj commit`, never `git commit`.
 - UI colors must stay within the terminal's default ANSI palette (colors
-  0–16); never emit hardcoded RGB values. The one sanctioned exception: the
-  focus-bar background is an RGB blend *derived from the terminal's own
-  colors* (queried via OSC 10/11 through terminal-colorsaurus at startup),
-  falling back to reverse video when the terminal doesn't answer.
+  0–16); never emit hardcoded RGB values. The one sanctioned exception is an
+  RGB blend *derived from the terminal's own colors* (queried via OSC 10/11
+  through terminal-colorsaurus at startup), used by surfaces that want a
+  translucent-looking background: the focus bar, the jump picker's selected
+  row, and the keybinding panel body. All three go through
+  `ui::focus_style`/`Palette::focus_bg`, which falls back to reverse video
+  when the terminal doesn't answer.
 
 ## Architecture
 
@@ -59,11 +62,19 @@ stdout and exits. The TUI renders on **stderr** so stdout can be piped.
   indexed children, default output and action paths are canonical JSON
   Pointers, and alternate output is compact JSON. No JSON values escape this
   module.
-- `src/app.rs` — `App`: keymap resolution (defaults + user overrides, `gg`
-  chord) and `AppCommand` execution against `TreeListViewState`. Returns
-  `Effect` (`Quit` / `PrintAndExit` / `RunShell`); no I/O here. Holds a
-  `Mode` (`Normal` / `Jump`); a modal picker takes over key handling in
-  `handle_key` until it closes.
+- `src/app.rs` — `App`: keymap resolution (defaults + user overrides; `?` is
+  reserved for the keybinding panel) and `AppCommand` execution against
+  `TreeListViewState`. Returns `Effect` (`Quit` / `PrintAndExit` /
+  `RunShell`); no I/O here. Holds a `Mode` (`Normal` / `Jump`); a modal picker
+  takes over key handling in `handle_key` until it closes.
+- `src/keybindings.rs` — the keybinding panel: the reserved `?`/`esc` key
+  constants, display entries derived once at startup from the effective keymap
+  (`build_entries`), the column-grid layout, and the panel's open/scroll/
+  recorded-area state (mouse-wheel routing tests against that area). `ui.rs`
+  docks it above the bottom edge, shrinks the tree viewport to fit, and fills
+  it with the terminal-derived focus blend inside an ANSI-blue border; without
+  a palette the body falls back to reverse video while the border stays blue
+  (reversing it would move the blue onto the background).
 - `src/jump.rs` — the `/` jump picker (`AppCommand::Jump`): a pure state
   machine that fuzzy-matches every node's `relpath` with `nucleo-matcher` and
   returns `Accept`/`Cancel`/`Stay`. Accept drives `select_by_id` to move focus

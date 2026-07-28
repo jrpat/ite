@@ -1,17 +1,23 @@
-//! Rendering: a single-column tree list using only the terminal's ANSI palette.
+//! Rendering: a single-column tree list, plus the jump picker and keybinding
+//! panel drawn over it. Colors stay inside the terminal's ANSI palette apart
+//! from the terminal-derived focus blend ([`Palette::focus_bg`]).
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Cell, Paragraph, Scrollbar, ScrollbarState, StatefulWidget, Widget};
+use ratatui::widgets::{Block, Cell, Paragraph, Scrollbar, ScrollbarState, StatefulWidget, Widget};
 use tui_treelistview::{
     ColumnDef, ColumnWidth, TreeColumnSet, TreeExpansionState, TreeGlyphs, TreeLabelPrefix,
     TreeLabelRenderer, TreeListView, TreeListViewStyle, TreeRowContext, tree_label_line,
 };
+use unicode_width::UnicodeWidthStr;
 
 use crate::app::{App, Mode};
 use crate::jump::Jump;
+use crate::keybindings::{
+    GRID_GAP, KeybindingEntry, KeybindingGrid, MAX_PANEL_ROWS, build_grid, truncate_with_ellipsis,
+};
 use crate::tree::{NodeId, Tree};
 
 struct Label;
@@ -114,18 +120,21 @@ impl Palette {
 /// known, and falls back to reverse video. Tree chrome uses ANSI foreground
 /// color 8. No border, no header.
 fn style(palette: Option<Palette>) -> TreeListViewStyle<'static> {
-    let highlight_style = match palette {
-        Some(palette) => Style::default().bg(palette.focus_bg()),
-        None => Style::default().add_modifier(Modifier::REVERSED),
-    };
     TreeListViewStyle {
-        highlight_style,
+        highlight_style: focus_style(palette),
         line_style: Style::default().fg(Color::DarkGray),
         highlight_symbol: "",
         // Long names truncate at the viewport edge instead of paying for the
         // widget's off-screen virtual canvas.
         horizontal_scroll: tui_treelistview::TreeHorizontalScroll::Disabled,
         ..TreeListViewStyle::borderless()
+    }
+}
+
+fn focus_style(palette: Option<Palette>) -> Style {
+    match palette {
+        Some(palette) => Style::default().bg(palette.focus_bg()),
+        None => Style::default().add_modifier(Modifier::REVERSED),
     }
 }
 
@@ -155,8 +164,20 @@ fn render_scrollbar(app: &App, area: Rect, buf: &mut Buffer) {
         width: 1,
         ..area
     };
-    let mut state = ScrollbarState::new(total - viewport + 1)
-        .position(app.state.offset())
+    render_gutter_scrollbar(gutter, total - viewport, app.state.offset(), viewport, buf);
+}
+
+/// Paint the quiet bar into a one-cell gutter: `scrollable + 1` thumb
+/// positions (one per reachable offset) over a `viewport`-row window.
+fn render_gutter_scrollbar(
+    gutter: Rect,
+    scrollable: usize,
+    position: usize,
+    viewport: usize,
+    buf: &mut Buffer,
+) {
+    let mut state = ScrollbarState::new(scrollable + 1)
+        .position(position)
         .viewport_content_length(viewport);
     scrollbar().render(gutter, buf, &mut state);
 }
@@ -166,9 +187,8 @@ fn render_scrollbar(app: &App, area: Rect, buf: &mut Buffer) {
 ///
 /// The opacity is dithered rather than blended: `▒` covers half of its cell and
 /// `░` a quarter, so the terminal's own background shows through at a fixed
-/// ratio. That keeps the bar inside the ANSI palette (no RGB, unlike the focus
-/// bar, which has no glyph to dither with) and makes it identical in terminals
-/// that never answered the OSC 10/11 query.
+/// ratio. That keeps the bar inside the ANSI palette and makes it identical in
+/// terminals that never answered the OSC 10/11 query.
 fn scrollbar() -> Scrollbar<'static> {
     Scrollbar::default()
         .thumb_symbol("▒")
@@ -178,9 +198,141 @@ fn scrollbar() -> Scrollbar<'static> {
         .style(Style::default().fg(Color::DarkGray))
 }
 
+struct PanelLayout {
+    area: Rect,
+    /// Where entry text goes: inside the border, padding, and scrollbar chrome.
+    content: Rect,
+    grid: KeybindingGrid,
+    overflow: bool,
+}
+
+fn keybinding_panel_layout(entries: &[KeybindingEntry], screen: Rect) -> PanelLayout {
+    let width_without_chrome = |scrollbar: bool| {
+        usize::from(screen.width)
+            .saturating_sub(2) // the Block border
+            .saturating_sub(2) // one cell of horizontal padding
+            .saturating_sub(usize::from(scrollbar))
+    };
+    let max_body_rows = usize::from(screen.height / 2).min(MAX_PANEL_ROWS);
+    let mut grid = build_grid(entries, width_without_chrome(false));
+    let mut viewport_rows = grid.rows.len().min(max_body_rows);
+    let mut overflow = grid.rows.len() > viewport_rows;
+    if overflow {
+        grid = build_grid(entries, width_without_chrome(true));
+        viewport_rows = grid.rows.len().min(max_body_rows);
+        overflow = grid.rows.len() > viewport_rows;
+    }
+
+    // `viewport_rows` is capped at MAX_PANEL_ROWS, so the height fits u16.
+    let height = ((viewport_rows + 2) as u16).min(screen.height);
+    let area = Rect::new(
+        screen.x,
+        screen.y + screen.height.saturating_sub(height),
+        screen.width,
+        height,
+    );
+    let content = Rect::new(
+        area.x + 2, // the Block border plus one cell of horizontal padding
+        area.y + 1,
+        width_without_chrome(overflow) as u16,
+        height.saturating_sub(2),
+    );
+    PanelLayout {
+        area,
+        content,
+        grid,
+        overflow,
+    }
+}
+
+fn render_keybinding_panel(app: &mut App, layout: &PanelLayout, buf: &mut Buffer) {
+    let entries = &app.panel_entries;
+    // Reverse video is the palette-less fallback for the panel body, but not
+    // for its ANSI-blue border: reversing the border would turn blue into its
+    // background instead of its foreground.
+    let block_style = app
+        .palette
+        .map(|palette| focus_style(Some(palette)))
+        .unwrap_or_default();
+    let block = Block::bordered()
+        .style(block_style)
+        .border_style(Style::default().fg(Color::Blue));
+    let inner = block.inner(layout.area);
+    block.render(layout.area, buf);
+    if app.palette.is_none() {
+        buf.set_style(inner, focus_style(None));
+    }
+    let viewport_rows = usize::from(layout.content.height);
+    app.keybinding_panel
+        .record_layout(layout.area, layout.grid.rows.len(), viewport_rows);
+
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+
+    let content = layout.content;
+    let key_style = Style::default()
+        .fg(Color::Blue)
+        .add_modifier(Modifier::BOLD);
+    let start = app.keybinding_panel.scroll();
+    let end = (start + viewport_rows).min(layout.grid.rows.len());
+    for (visible_row, row) in layout.grid.rows[start..end].iter().enumerate() {
+        let y = content.y + visible_row as u16;
+        for (column, &entry_index) in row.iter().enumerate() {
+            let entry = &entries[entry_index];
+            // Grid widths derive from the u16 screen width, so they fit u16.
+            let x = content.x + (column * (layout.grid.column_width + GRID_GAP)) as u16;
+            let column_width = layout
+                .grid
+                .column_width
+                .min(usize::from(content.right().saturating_sub(x)));
+            if column_width == 0 {
+                continue;
+            }
+
+            // Right-align the key label within the key column.
+            let key_width = layout.grid.key_width.min(column_width);
+            let label_width = UnicodeWidthStr::width(entry.label.full.as_str()).min(key_width);
+            buf.set_stringn(
+                x + (key_width - label_width) as u16,
+                y,
+                &entry.label.full,
+                label_width,
+                key_style,
+            );
+
+            let description_width = column_width.saturating_sub(key_width + 1);
+            if description_width > 0 {
+                buf.set_stringn(
+                    x + (key_width + 1) as u16,
+                    y,
+                    truncate_with_ellipsis(&entry.description, description_width),
+                    description_width,
+                    Style::default(),
+                );
+            }
+        }
+    }
+
+    if layout.overflow {
+        let gutter = Rect::new(inner.right() - 1, inner.y, 1, inner.height);
+        render_gutter_scrollbar(
+            gutter,
+            layout.grid.rows.len().saturating_sub(viewport_rows),
+            app.keybinding_panel.scroll(),
+            viewport_rows,
+            buf,
+        );
+    }
+}
+
 /// Render the current mode into `area`. In a modal picker the tree is hidden;
 /// otherwise the tree list is drawn and the viewport height recorded for paging.
 pub fn draw(app: &mut App, area: Rect, buf: &mut Buffer) {
+    // The recorded layout resets every frame and only the panel-painting path
+    // below records a fresh one, so a mode that never draws the panel cannot
+    // leave a stale rectangle capturing mouse events.
+    app.keybinding_panel.clear_layout();
     if let Mode::Jump(_) = app.mode {
         let palette = app.palette;
         let target = jump_area(area);
@@ -189,17 +341,36 @@ pub fn draw(app: &mut App, area: Rect, buf: &mut Buffer) {
         }
         return;
     }
-    app.page_height = area.height as usize;
+
+    let panel = app
+        .keybinding_panel
+        .is_open()
+        .then(|| keybinding_panel_layout(&app.panel_entries, area));
+    let tree_area = match &panel {
+        Some(layout) => Rect::new(
+            area.x,
+            area.y,
+            area.width,
+            layout.area.y.saturating_sub(area.y),
+        ),
+        None => area,
+    };
+    app.page_height = tree_area.height as usize;
     {
         let _span = crate::profile::span("ui::ensure_projection");
         app.state.ensure_projection(&app.tree, &app.query);
     }
-    let _span = crate::profile::span("ui::widget_render");
-    let columns = columns();
-    let widget = TreeListView::new(&app.tree, &app.query, &Label, &columns, style(app.palette))
-        .glyphs(GLYPHS);
-    widget.render(area, buf, &mut app.state);
-    render_scrollbar(app, area, buf);
+    if tree_area.width > 0 && tree_area.height > 0 {
+        let _span = crate::profile::span("ui::widget_render");
+        let columns = columns();
+        let widget = TreeListView::new(&app.tree, &app.query, &Label, &columns, style(app.palette))
+            .glyphs(GLYPHS);
+        widget.render(tree_area, buf, &mut app.state);
+        render_scrollbar(app, tree_area, buf);
+    }
+    if let Some(layout) = panel {
+        render_keybinding_panel(app, &layout, buf);
+    }
 }
 
 /// The jump picker's placement. Today it is the whole screen; moving it to a
@@ -681,6 +852,85 @@ mod tests {
         assert!(
             elapsed < std::time::Duration::from_millis(500),
             "100 draws took {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn keybinding_panel_is_bottom_docked_styled_and_reduces_the_tree_viewport() {
+        use crate::keys::Key;
+        let (_d, mut app) = fixture_app();
+        app.palette = Some(Palette {
+            fg: (255, 255, 255),
+            bg: (0, 0, 0),
+        });
+        app.handle_key(Key::parse("?").unwrap());
+
+        let (buf, text) = drawn(&mut app, 80, 24);
+        let panel = app.keybinding_panel.area().expect("panel area");
+
+        assert_eq!(panel.y + panel.height, 24);
+        assert_eq!(app.page_height, panel.y as usize);
+        assert_eq!(buf[(panel.x, panel.y)].symbol(), "┌");
+        assert_eq!(buf[(panel.x, panel.y)].fg, Color::Blue);
+        assert_eq!(buf[(panel.x + 1, panel.y + 1)].bg, Color::Rgb(26, 26, 26));
+        assert!(text.contains("Shortcuts"), "{text}");
+        assert!(text.contains("Close"), "{text}");
+        assert!(text.contains("First"), "{text}");
+        assert!(!text.contains("gg"), "{text}");
+
+        let blue_bold_key = (panel.y..panel.bottom()).any(|y| {
+            (panel.x..panel.right()).any(|x| {
+                let cell = &buf[(x, y)];
+                cell.fg == Color::Blue && cell.modifier.contains(Modifier::BOLD)
+            })
+        });
+        assert!(blue_bold_key, "expected bold blue key labels:\n{text}");
+    }
+
+    #[test]
+    fn overflowing_keybinding_panel_reuses_the_app_scrollbar_style() {
+        use crate::keys::Key;
+        let (_d, mut app) = fixture_app();
+        app.handle_key(Key::parse("?").unwrap());
+
+        let (buf, text) = drawn(&mut app, 30, 12);
+        let panel = app.keybinding_panel.area().expect("panel area");
+        assert_eq!(panel.height, 8, "six body rows plus the border");
+
+        let x = panel.x + panel.width - 2;
+        let symbols: Vec<_> = (panel.y + 1..panel.y + panel.height - 1)
+            .map(|y| buf[(x, y)].symbol())
+            .collect();
+        assert!(
+            symbols
+                .iter()
+                .all(|symbol| *symbol == "▒" || *symbol == "░"),
+            "unexpected scrollbar {symbols:?}:\n{text}"
+        );
+        assert!(symbols.contains(&"▒"));
+        assert!(symbols.contains(&"░"));
+        assert_eq!(buf[(x, panel.y + 1)].fg, Color::DarkGray);
+    }
+
+    #[test]
+    fn keybinding_panel_uses_reverse_video_when_the_palette_is_unknown() {
+        use crate::keys::Key;
+        let (_d, mut app) = fixture_app();
+        app.handle_key(Key::parse("?").unwrap());
+
+        let (buf, _text) = drawn(&mut app, 80, 24);
+        let panel = app.keybinding_panel.area().expect("panel area");
+
+        assert!(
+            buf[(panel.x + 1, panel.y + 1)]
+                .modifier
+                .contains(Modifier::REVERSED)
+        );
+        let border = &buf[(panel.x, panel.y)];
+        assert_eq!(border.fg, Color::Blue);
+        assert!(
+            !border.modifier.contains(Modifier::REVERSED),
+            "the fallback must not reverse the ANSI-blue border"
         );
     }
 

@@ -20,3 +20,12 @@ which the project forbids (see AGENTS.md), so it is not a candidate surface.
   rendering into an arbitrary `Rect`.
 - Full-screen "hides" the tree simply by drawing over the whole area — no
   compositing, no dimming.
+
+## Update (2026-07-28)
+
+The palette rule has since widened: the sanctioned exception is the
+terminal-derived blend itself rather than one bar (see AGENTS.md), and the
+keybinding panel uses it too. Dimming toward the terminal's own background is
+therefore no longer forbidden, so a dimmed-tree overlay is a live candidate
+again. The decision above is unaffected — placement stays one swappable
+function, which is what makes trying that surface cheap.

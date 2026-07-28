@@ -111,9 +111,14 @@ Navigation is vim-flavored:
 | `J`, `K` | Next / previous sibling, hurdling expanded subtrees |
 | `ctrl+f` / `ctrl+b` | Page down / up |
 | `ctrl+d` / `ctrl+u` | Half-page down / up |
-| `gg`, `G` | First line, last visible line |
+| `g`, `G` | First line, last visible line |
+| `?` | Toggle the keybinding panel |
 | `esc` | Restore the previous root; quit from the original tree |
 | `q`, `ctrl+c` | Quit |
+
+The keybinding panel stays open while its listed bindings run; `?` or `esc`
+closes it. On short terminals, point at the panel and use the mouse wheel to
+scroll its complete effective keymap.
 
 <sub>
 Note: <tt>ctrl+enter</tt> and <tt>shift+arrow</tt> require a terminal
@@ -129,14 +134,17 @@ the key:
 ```toml
 [ctrl+e]
 sh = "vim $path"     # run a shell command on the focused node
+help = "Edit"         # optional keybinding-panel description
 exit = true          # then leave ite (default: false)
 
 [alt+s]
 sh = "attach-to-review $relpath"
+help = "Attach to review"
 bg = true            # run detached, without leaving the TUI (default: false)
 
 [ctrl+l]
 cmd = "expand-recursively"   # or run an ite command instead
+help = "Expand project"      # overrides the built-in command description
 ```
 
 `sh` commands run via `sh -c` with two environment variables set. For a
@@ -151,6 +159,13 @@ finishes; editors work exactly as you'd hope.
 `select`, `accept`, `accept-alternate`, `descend`, `root`, `pop-root`, `back`,
 `next-sibling`, `prev-sibling`, `page-down`, `page-up`, `half-page-down`,
 `half-page-up`, `first`, `last`, `jump`, `quit`.
+
+`help` is optional. Its trimmed first line is displayed verbatim in the
+keybinding panel (control characters become spaces). Without `help`, `cmd`
+bindings use the built-in command description; `sh` bindings show the
+command's first line in backticks, truncated to 12 terminal cells. The `?` key
+is reserved for the panel: a configured `[?]` table is accepted but silently
+ignored.
 
 User bindings override the defaults, so if you bind `j` to something exotic,
 `ite` assumes you meant it.

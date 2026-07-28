@@ -37,3 +37,9 @@ _Avoid_: finder, fuzzy finder, palette
 A node offered to the [Jump picker](#language) for matching — every node is one.
 Matched on its path (the root-relative path for a dir scan, the JSON Pointer for
 `--json`).
+
+**Keybinding panel**:
+A bottom-docked help surface listing the active keys with brief descriptions of
+their bindings. During tree navigation, the reserved `?` key toggles it; it
+remains open while its bindings are used and otherwise closes only on `esc`.
+_Avoid_: shortcut panel, help panel

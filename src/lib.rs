@@ -9,6 +9,7 @@ pub mod config;
 pub mod fstree;
 pub mod json_tree;
 pub mod jump;
+pub mod keybindings;
 pub mod keys;
 pub mod profile;
 pub mod runner;

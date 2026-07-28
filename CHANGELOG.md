@@ -4,6 +4,11 @@ All notable changes to Ite will be documented in this file.
 
 ## [Unreleased]
 
+- Added the `?` keybinding panel: a bottom-docked list of the effective keymap,
+  scrollable with the mouse wheel when it overflows.
+- Added an optional `help` description to keybinding tables.
+- Replaced the `gg` chord with a single `g` for the first line.
+
 ## [0.1.0] - 2026-07-27
 
 ### Highlights

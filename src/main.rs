@@ -182,11 +182,16 @@ fn handle_event(app: &mut App, event: Event) -> Effect {
         }
         Event::Mouse(event) => {
             match event.kind {
-                MouseEventKind::ScrollDown => {
-                    app.state.scroll_view_by(MOUSE_SCROLL_ROWS);
-                }
-                MouseEventKind::ScrollUp => {
-                    app.state.scroll_view_by(-MOUSE_SCROLL_ROWS);
+                MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
+                    let delta = match event.kind {
+                        MouseEventKind::ScrollDown => MOUSE_SCROLL_ROWS,
+                        _ => -MOUSE_SCROLL_ROWS,
+                    };
+                    if app.keybinding_panel.contains(event.column, event.row) {
+                        app.keybinding_panel.scroll_by(delta);
+                    } else {
+                        app.state.scroll_view_by(delta);
+                    }
                 }
                 _ => {}
             }
@@ -406,5 +411,39 @@ mod tests {
             "the viewport should remain scrolled after redraw"
         );
         assert_eq!(app.focused_id(), focused, "focus should not move");
+    }
+
+    #[test]
+    fn mouse_wheel_over_the_keybinding_panel_scrolls_it_not_the_tree() {
+        let mut tree = Tree::new();
+        for index in 0..30 {
+            tree.push(
+                None,
+                format!("row {index}"),
+                false,
+                ite_cli::tree::ActionValues::new("", "", ""),
+            );
+        }
+        let mut app = App::new(tree, &Config::default(), None);
+        app.handle_key(Key::parse("?").unwrap());
+        let area = ratatui::layout::Rect::new(0, 0, 30, 12);
+        let mut buffer = ratatui::buffer::Buffer::empty(area);
+        ite_cli::ui::draw(&mut app, area, &mut buffer);
+        let panel = app.keybinding_panel.area().unwrap();
+        let tree_offset = app.state.offset();
+
+        let effect = handle_event(
+            &mut app,
+            Event::Mouse(crossterm::event::MouseEvent {
+                kind: crossterm::event::MouseEventKind::ScrollDown,
+                column: panel.x + 1,
+                row: panel.y + 1,
+                modifiers: crossterm::event::KeyModifiers::NONE,
+            }),
+        );
+
+        assert_eq!(effect, Effect::None);
+        assert!(app.keybinding_panel.scroll() > 0);
+        assert_eq!(app.state.offset(), tree_offset);
     }
 }

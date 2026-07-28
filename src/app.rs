@@ -8,6 +8,9 @@ use tui_treelistview::{TreeListViewState, TreeQuery};
 use crate::cli::ExpandSpec;
 use crate::config::{AppCommand, Binding, BindingAction, Config};
 use crate::jump::{Jump, JumpOutcome};
+use crate::keybindings::{
+    CLOSE_KEY, KeybindingEntry, KeybindingPanelState, TOGGLE_KEY, build_entries,
+};
 use crate::keys::Key;
 use crate::tree::{NodeId, Tree};
 
@@ -44,10 +47,11 @@ pub struct App {
     /// The current input mode; see [`Mode`].
     pub mode: Mode,
     keymap: HashMap<Key, Binding>,
+    /// Panel rows derived from the effective keymap, built once at startup.
+    pub(crate) panel_entries: Vec<KeybindingEntry>,
+    pub keybinding_panel: KeybindingPanelState,
     /// Temporary view roots, from the original forest to the current subtree.
     root_history: Vec<Option<NodeId>>,
-    /// True after a bare `g`, waiting for the second `g` of the chord.
-    pending_g: bool,
     /// Rows per screen; the UI updates this every frame.
     pub page_height: usize,
     /// Terminal default colors, when the terminal answered the startup query.
@@ -57,15 +61,25 @@ pub struct App {
 impl App {
     pub fn new(tree: Tree, config: &Config, expand: Option<ExpandSpec>) -> Self {
         let mut keymap = Self::default_keymap();
-        keymap.extend(config.bindings.clone());
+        // `?` is reserved for the panel toggle: a configured `[?]` table is
+        // accepted but silently ignored.
+        keymap.extend(
+            config
+                .bindings
+                .iter()
+                .filter(|&(&key, _)| key != TOGGLE_KEY)
+                .map(|(&key, binding)| (key, binding.clone())),
+        );
+        let panel_entries = build_entries(&keymap);
         let mut app = Self {
             tree,
             state: TreeListViewState::with_capacity(0),
             query: TreeQuery::new(),
             mode: Mode::Normal,
             keymap,
+            panel_entries,
+            keybinding_panel: KeybindingPanelState::default(),
             root_history: Vec::new(),
-            pending_g: false,
             page_height: 20,
             palette: None,
         };
@@ -95,6 +109,7 @@ impl App {
     pub fn default_keymap() -> HashMap<Key, Binding> {
         let cmd = |action: AppCommand| Binding {
             action: BindingAction::Cmd(action),
+            help: None,
             exit: false,
             bg: false,
         };
@@ -119,8 +134,10 @@ impl App {
             (&["ctrl+b"], AppCommand::PageUp),
             (&["ctrl+d"], AppCommand::HalfPageDown),
             (&["ctrl+u"], AppCommand::HalfPageUp),
+            (&["g"], AppCommand::First),
             (&["G"], AppCommand::Last),
             (&["/"], AppCommand::Jump),
+            (&["?"], AppCommand::ToggleKeybindingPanel),
             (&["esc"], AppCommand::Back),
             (&["q", "ctrl+c"], AppCommand::Quit),
         ] {
@@ -145,7 +162,7 @@ impl App {
             .collect()
     }
 
-    /// Handle a normalized key, resolving chords and the keymap.
+    /// Handle a normalized key through the active mode and effective keymap.
     pub fn handle_key(&mut self, key: Key) -> Effect {
         let _span = crate::profile::span("app::handle_key");
         // A modal picker takes over key handling until it closes. Accepting
@@ -165,17 +182,12 @@ impl App {
                 }
             };
         }
-        let g = Key::parse("g").unwrap();
-        if self.pending_g {
-            self.pending_g = false;
-            if key == g {
-                return self.run_command(AppCommand::First);
-            }
-            // fall through: the second key is handled normally
-        } else if key == g && !self.keymap.contains_key(&g) {
-            self.pending_g = true;
+
+        if self.keybinding_panel.is_open() && key == CLOSE_KEY {
+            self.keybinding_panel.close();
             return Effect::None;
         }
+
         match self.keymap.get(&key).cloned() {
             None => Effect::None,
             Some(binding) => match binding.action {
@@ -305,6 +317,7 @@ impl App {
             AppCommand::Jump => {
                 self.mode = Mode::Jump(Jump::open(&self.tree));
             }
+            AppCommand::ToggleKeybindingPanel => self.keybinding_panel.toggle(),
             AppCommand::Quit => return Effect::Quit,
         }
         Effect::None
@@ -911,17 +924,11 @@ mod tests {
     }
 
     #[test]
-    fn gg_chord_goes_to_first_line() {
+    fn g_goes_to_first_line_without_a_chord() {
         let (_d, mut app) = app();
         app.run_command(AppCommand::Last);
         assert_eq!(app.handle_key(Key::parse("g").unwrap()), Effect::None);
-        app.handle_key(Key::parse("g").unwrap());
         assert_eq!(focused_name(&mut app), "a");
-        // A non-g key cancels the pending chord.
-        app.run_command(AppCommand::Last);
-        app.handle_key(Key::parse("g").unwrap());
-        app.handle_key(Key::parse("j").unwrap());
-        assert_eq!(focused_name(&mut app), "c.txt");
     }
 
     #[test]
@@ -962,6 +969,69 @@ mod tests {
         let config = Config::parse("[j]\ncmd = \"quit\"\n").unwrap();
         let mut app = App::new(tree, &config, None);
         assert_eq!(app.handle_key(Key::parse("j").unwrap()), Effect::Quit);
+    }
+
+    #[test]
+    fn user_can_override_the_new_g_binding() {
+        let (_d, tree) = fixture();
+        let config = Config::parse("[g]\ncmd = \"quit\"\n").unwrap();
+        let mut app = App::new(tree, &config, None);
+        assert_eq!(app.handle_key(Key::parse("g").unwrap()), Effect::Quit);
+    }
+
+    #[test]
+    fn question_mark_is_reserved_and_toggles_the_panel() {
+        let (_d, tree) = fixture();
+        let config = Config::parse("[?]\ncmd = \"quit\"\nhelp = \"Wrong\"\n").unwrap();
+        let mut app = App::new(tree, &config, None);
+
+        // The `[?]` table was dropped: the panel lists the reserved binding,
+        // not the configured one.
+        let question: Vec<_> = app
+            .panel_entries
+            .iter()
+            .filter(|entry| entry.key == Key::parse("?").unwrap())
+            .collect();
+        assert_eq!(question.len(), 1);
+        assert_eq!(question[0].description, "Shortcuts");
+
+        assert!(!app.keybinding_panel.is_open());
+        assert_eq!(app.handle_key(Key::parse("?").unwrap()), Effect::None);
+        assert!(app.keybinding_panel.is_open());
+        assert_eq!(app.handle_key(Key::parse("?").unwrap()), Effect::None);
+        assert!(!app.keybinding_panel.is_open());
+    }
+
+    #[test]
+    fn open_panel_stays_open_while_bindings_run_and_escape_only_closes_it() {
+        let (_d, mut app) = app();
+        app.handle_key(Key::parse("?").unwrap());
+
+        app.handle_key(Key::parse("j").unwrap());
+        assert_eq!(focused_name(&mut app), "b");
+        assert!(app.keybinding_panel.is_open());
+
+        assert_eq!(app.handle_key(Key::parse("esc").unwrap()), Effect::None);
+        assert!(!app.keybinding_panel.is_open());
+        assert_eq!(focused_name(&mut app), "b");
+    }
+
+    #[test]
+    fn jump_owns_question_mark_and_escape_without_dismissing_the_panel() {
+        let (_d, mut app) = app();
+        app.handle_key(Key::parse("?").unwrap());
+        app.handle_key(Key::parse("/").unwrap());
+        app.handle_key(Key::parse("?").unwrap());
+
+        let Mode::Jump(jump) = &app.mode else {
+            panic!("expected jump mode");
+        };
+        assert_eq!(jump.query(), "?");
+        assert!(app.keybinding_panel.is_open());
+
+        app.handle_key(Key::parse("esc").unwrap());
+        assert!(matches!(app.mode, Mode::Normal));
+        assert!(app.keybinding_panel.is_open());
     }
 
     #[test]
