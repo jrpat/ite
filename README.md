@@ -3,12 +3,16 @@
 **i**nteractive **t**ree **e**xplorer — a terminal UI for walking a tree,
 poking at it, and doing something useful with whatever you land on.
 
-The elevator pitch: `tree` shows you everything and scrolls off the screen;
-`ite` shows you a collapsed tree and lets you open exactly the doors you care
-about. Press enter on a leaf and its selection lands on stdout. For a
-filesystem tree that is the absolute path; for a JSON document it is the
-selected node's JSON Pointer. That's the whole trick, and it composes
-beautifully:
+It is designed for two distict workflows:
+- In a pipeline it behaves like `fzf`: you open it, pick one thing, and it hands that
+  thing to whatever comes next.
+- It can also behave like a sidebar, and you can easily bind keys to run shell commands
+  against the focused node.
+
+Used in a pipeline, simply press enter on a leaf and its value goes to stdout — the
+absolute path for a filesystem tree, the node's JSON Pointer for a JSON document.
+
+Use it like you do `fzf`:
 
 ```sh
 vim "$(ite)"          # pick a file, edit it
@@ -17,8 +21,22 @@ ite --json response.json      # explore a JSON document
 curl -s api.example.com/users | ite   # pipe JSON straight in
 ```
 
-The interface draws on **stderr**, so stdout stays clean for the value. If you
-have ever piped `fzf`, you already know this dance.
+## Installation
+
+```sh
+brew install jrpat/ite-tap/ite   # Homebrew (macOS/Linux)
+cargo install ite-cli            # from crates.io, installs the `ite` binary
+```
+
+Or grab a prebuilt binary:
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/jrpat/ite/releases/latest/download/ite-cli-installer.sh | sh
+```
+
+Prebuilt archives for macOS and Linux (x86_64/aarch64) are also available on
+the [releases page](https://github.com/jrpat/ite/releases).
 
 ## Usage
 
@@ -54,14 +72,11 @@ $ ite --json users.json
 └ • [1]: null
 ```
 
-Accepting a JSON node writes its canonical JSON Pointer, such as
-`/users/0/name`; the root pointer is empty. `$path` and `$relpath` in shell
-bindings contain the same value.
+Accepting a JSON node writes its canonical JSON Pointer, such as `/users/0/name`; the
+root pointer is empty. `$path` and `$relpath` in shell bindings contain the same value.
 
-JSON can also arrive on a pipe, `fzf`-style. When stdin is not a terminal and
-no directory is given, `ite` reads a JSON document from stdin; `--json -`
-requests the same thing explicitly. Keyboard input then comes from
-`/dev/tty`, so the interface works as usual:
+JSON can also arrive on a pipe. When stdin is not a terminal and no directory is given,
+`ite` reads a JSON document from stdin; `--json -` requests the same thing explicitly.
 
 ```sh
 curl -s api.example.com/users | ite
@@ -79,7 +94,7 @@ command's status through.
 
 ## Keys
 
-Navigation is vim-flavored, with arrows for the unconverted:
+Navigation is vim-flavored:
 
 | Key | Action |
 |-----|--------|
@@ -98,9 +113,10 @@ Navigation is vim-flavored, with arrows for the unconverted:
 | `gg`, `G` | First line, last visible line |
 | `q`, `esc`, `ctrl+c` | Quit |
 
-A note for the fine print: `ctrl+enter` and `shift+arrow` require a terminal
-that speaks the kitty keyboard protocol (kitty, WezTerm, foot, recent
-iTerm2...). Elsewhere, the synonyms — `tab`, `L`, `H` — have you covered.
+<sub>
+Note: <tt>ctrl+enter</tt> and <tt>shift+arrow</tt> require a terminal
+that speaks the kitty keyboard protocol.
+</sub>
 
 ## Configuration
 
