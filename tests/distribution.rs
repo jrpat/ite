@@ -38,7 +38,7 @@ fn package_identity_and_metadata_are_ready_to_publish() {
     let package = manifest["package"].as_table().expect("package table");
 
     assert_eq!(package["name"].as_str(), Some("ite-cli"));
-    assert_eq!(package["version"].as_str(), Some("0.1.0"));
+    assert_eq!(package["version"].as_str(), Some("0.1.1"));
     assert_eq!(package["edition"].as_str(), Some("2024"));
     assert_eq!(package["rust-version"].as_str(), Some("1.88"));
     assert_eq!(package["license"].as_str(), Some("MIT"));
@@ -76,6 +76,7 @@ fn package_identity_and_metadata_are_ready_to_publish() {
     assert_contains(&read("LICENSE"), "MIT License");
     assert_contains(&read("LICENSE"), "Copyright (c) 2026 Juan Patino");
     assert_contains(&read("CHANGELOG.md"), "## [Unreleased]");
+    assert_contains(&read("CHANGELOG.md"), "## [0.1.1] - 2026-07-29");
 }
 
 #[test]
@@ -89,7 +90,7 @@ fn installed_binary_keeps_the_user_facing_name_and_version() {
     assert!(output.status.success());
     assert_eq!(
         String::from_utf8(output.stdout).unwrap().trim(),
-        "ite 0.1.0"
+        "ite 0.1.1"
     );
 }
 

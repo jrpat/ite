@@ -4,10 +4,37 @@ All notable changes to Ite will be documented in this file.
 
 ## [Unreleased]
 
-- Added the `?` keybinding panel: a bottom-docked list of the effective keymap,
-  scrollable with the mouse wheel when it overflows.
-- Added an optional `help` description to keybinding tables.
-- Replaced the `gg` chord with a single `g` for the first line.
+## [0.1.1] - 2026-07-29
+
+### Highlights
+
+- Press `?` to open a bottom-docked, scrollable shortcut panel showing the
+  effective keymap, including user overrides and custom help.
+- Press Tab to make the focused node a temporary tree root, then Shift-Tab or
+  Escape to unwind roots while keeping navigation and fuzzy jump scoped to the
+  active subtree.
+- Press Space to toggle a container or Ctrl-Space to toggle its whole subtree
+  without moving focus.
+- Navigate leaves more fluidly with `l`/`L` stepping to the next sibling and
+  `H` recursively collapsing the enclosing parent when the focused node cannot
+  collapse.
+
+### All changes
+
+- Fixed toggle-command labels in the shortcut panel and strengthened the
+  related UI and release regressions.
+- Codified Ite's guarded, verifiable release procedure as a reusable agent
+  skill.
+- Added the `?` shortcut panel, simplified first-line navigation from `gg` to
+  `g`, and supported optional help text on configured bindings.
+- Added plain and recursive container toggles on Space and Ctrl-Space.
+- Made `l` and `L` step to the next sibling when focused on a leaf.
+- Made `H` recursively collapse and focus the parent when the focused node has
+  nothing to collapse.
+- Replaced the bright default scrollbar with a quieter ANSI-gray dithered bar.
+- Added temporary tree-root navigation with Tab, Shift-Tab, and Escape.
+- Refreshed the README around pipeline/sidebar workflows and installation.
+- Added a non-publishing crates.io OIDC credential rehearsal.
 
 ## [0.1.0] - 2026-07-27
 
