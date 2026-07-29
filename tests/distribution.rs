@@ -316,3 +316,42 @@ fn homebrew_workflow_is_stable_idempotent_and_tests_the_binary() {
     assert_contains(&workflow, "git diff --quiet");
     assert_contains(&workflow, "Ite release bot");
 }
+
+#[test]
+fn release_skill_is_discoverable_and_covers_the_release_contract() {
+    let skill = read(".agents/skills/ite-release/SKILL.md");
+
+    for required in [
+        "name: ite-release",
+        "## Guardrails",
+        "empty Jujutsu working-copy commit",
+        "recommend the next version and wait for agreement",
+        "explicit approval",
+        "Release vX.Y.Z",
+        "jj bookmark set main -r @-",
+        "Do not push a local tag",
+        "gh workflow run Release",
+        "## Verify the published release",
+        "## Recover safely",
+        "short-lived OIDC credential",
+    ] {
+        assert_contains(&skill, required);
+    }
+    assert!(
+        !skill.contains("TODO"),
+        "the release skill must not contain scaffold placeholders"
+    );
+
+    let link = root().join("claude/skills/ite-release");
+    let metadata = std::fs::symlink_metadata(&link)
+        .unwrap_or_else(|error| panic!("failed to inspect {}: {error}", link.display()));
+    assert!(
+        metadata.file_type().is_symlink(),
+        "{} must be a symlink",
+        link.display()
+    );
+    assert_eq!(
+        std::fs::read_link(&link).expect("read release skill symlink"),
+        Path::new("../../.agents/skills/ite-release")
+    );
+}

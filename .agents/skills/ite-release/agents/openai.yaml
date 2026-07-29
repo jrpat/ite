@@ -1,0 +1,4 @@
+interface:
+  display_name: "Release Ite"
+  short_description: "Cut and verify an Ite release safely"
+  default_prompt: "Use $ite-release to cut and fully verify the next Ite release."
