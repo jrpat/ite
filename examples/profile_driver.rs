@@ -36,12 +36,20 @@ fn main() {
         .map(|s| s.parse().expect("ITERS must be a number"))
         .unwrap_or(15);
 
-    let meta = std::fs::metadata(&path)
-        .unwrap_or_else(|error| panic!("cannot stat {path}: {error}"));
+    let meta =
+        std::fs::metadata(&path).unwrap_or_else(|error| panic!("cannot stat {path}: {error}"));
     let is_dir = meta.is_dir();
 
     let build = std::process::Command::new("cargo")
-        .args(["build", "--release", "--bin", "ite", "-q"])
+        .args([
+            "build",
+            "--release",
+            "--features",
+            "profile",
+            "--bin",
+            "ite",
+            "-q",
+        ])
         .status()
         .expect("cargo build");
     assert!(build.success(), "release build failed");
@@ -126,7 +134,11 @@ fn main() {
     // complete, so on a lazy file "settled" ≈ time to full index; report it
     // separately from first paint. Cap generously: a big file sweeps for a
     // while.
-    wait_quiet(&output, Duration::from_millis(150), Duration::from_secs(120));
+    wait_quiet(
+        &output,
+        Duration::from_millis(150),
+        Duration::from_secs(120),
+    );
     if let Some(status) = child.try_wait().expect("try_wait") {
         panic!("ite exited during startup ({status}); is {path} a valid input?");
     }

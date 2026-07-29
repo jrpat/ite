@@ -61,6 +61,7 @@ fn run() -> Result<ExitCode, String> {
         eprintln!("ite: {error}");
     }
 
+    #[cfg(feature = "profile")]
     if let Some(path) = ite_cli::profile::output_path() {
         ite_cli::profile::GLOBAL
             .write_to(std::path::Path::new(path))

@@ -29,12 +29,22 @@ exclude = [
     "tests/",
 ]
 
+[features]
+# Compiles in the span profiler (src/profile.rs). Off by default: shipped
+# builds contain zero instrumentation — no ITE_PROFILE lookup, no registry,
+# spans erased. `cargo profile-tui` builds with it.
+profile = []
+
 [[bin]]
 name = "ite"
 path = "src/main.rs"
 
 [lib]
 doc = false
+
+[[example]]
+name = "profile_driver"
+required-features = ["profile"]
 
 [dependencies]
 clap = { version = "4.6.3", features = ["derive"] }

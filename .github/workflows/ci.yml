@@ -30,10 +30,14 @@ jobs:
         run: cargo fmt --check
 
       - name: Lint
-        run: cargo clippy --all-targets -- -D warnings
+        run: |
+          cargo clippy --all-targets -- -D warnings
+          cargo clippy --all-targets --features profile -- -D warnings
 
       - name: Test
-        run: cargo test --locked
+        run: |
+          cargo test --locked
+          cargo test --locked --features profile
 
       - name: Validate crates.io package
         run: cargo publish --dry-run --locked

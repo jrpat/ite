@@ -27,9 +27,12 @@ stdout and exits. The TUI renders on **stderr** so stdout can be piped.
   content detection picks the mode; startup stays lazy, the report splits
   first paint from index settle, and expansion phases get long response
   deadlines so synchronous-materialization hitches are measured rather than
-  written off as silent keys). Spans come from `src/profile.rs` and are
-  enabled by `ITE_PROFILE=<output-path>`; add `profile::span("label")`
-  guards to instrument new hot paths.
+  written off as silent keys). Spans come from `src/profile.rs`, compiled
+  only under the `profile` cargo feature (the alias passes it) and enabled
+  at runtime by `ITE_PROFILE=<output-path>`; add `profile::span("label")`
+  guards to instrument new hot paths. Default builds ship zero
+  instrumentation, so when touching profiling code also lint/test with
+  `--features profile` (CI runs both configurations).
 
 ## Development rules
 
@@ -143,8 +146,13 @@ stdout and exits. The TUI renders on **stderr** so stdout can be piped.
   `scrollbar_thumb_tracks_the_viewport` guards that coupling. Also
   `render_jump`: draws the jump picker into any `Rect` (placement via
   `jump_area`, the identity today), so its surface is swappable (ADR-0002).
-- `src/profile.rs` — span profiler (`Registry`, `Stats`), gated on
-  `ITE_PROFILE`; the driver example reuses its `Stats`/formatting.
+- `src/profile.rs` — span profiler (`Registry`, `Stats`), compiled only
+  with the `profile` cargo feature; without it `span()` returns an inlined
+  unit no-op the optimizer erases, so shipped builds carry zero
+  instrumentation and ignore `ITE_PROFILE` (both sides guarded by
+  `tests/profile_gate.rs`). When compiled in, recording is gated on
+  `ITE_PROFILE` at runtime. `Stats`/`format_duration` stay unconditional —
+  the driver example uses them for its own latency report.
 - `src/main.rs` — chooses the tree source (`choose_source`: an explicit
   `--json`/`--jsonl` file or `-`, a positional directory, else piped stdin
   means JSON-family with content detection and a tty stdin means `.`); owns
@@ -153,7 +161,8 @@ stdout and exits. The TUI renders on **stderr** so stdout can be piped.
   `shift+arrow`), event loop, effect execution. Exit codes: 0 selection, 130
   quit, foreground `exit` bindings propagate the command's status.
   Piped-stdin support rests on three legs (regression-tested in
-  `tests/piped_stdin.rs`): stdin is consumed to EOF before the TUI starts and
+  `tests/piped_stdin.rs`; the PTY harness is shared via `tests/common/`):
+  stdin is consumed to EOF before the TUI starts and
   crossterm then reads events from `/dev/tty`; the crossterm `use-dev-tty`
   feature makes that polling use select() because kqueue cannot watch
   `/dev/tty` on macOS; and while the TUI is active fd 1 is dup2'd onto stderr

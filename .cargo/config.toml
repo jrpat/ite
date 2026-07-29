@@ -1,6 +1,6 @@
 [alias]
 # Headless TUI profile: real pty, simulated keys, readable report.
 # Usage: cargo profile-tui [PATH] [ITERS]
-profile-tui = "run --quiet --release --example profile_driver --"
+profile-tui = "run --quiet --release --features profile --example profile_driver --"
 # Release-build and install to $XDG_BIN_HOME/ite (default ~/.local/bin/ite).
 local-bin = "run --quiet --release --example install"
