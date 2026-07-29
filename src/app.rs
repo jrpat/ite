@@ -38,7 +38,13 @@ pub enum Effect {
 pub enum Mode {
     Normal,
     Jump(Jump),
+    /// Blocking on index completion before the jump picker can open; a
+    /// progress line renders until the sweep finishes (esc cancels).
+    Indexing,
 }
+
+/// Nodes loaded per cooperative work quantum in [`App::do_work`].
+const WORK_QUANTUM: usize = 500;
 
 pub struct App {
     pub tree: Tree,
@@ -85,19 +91,28 @@ impl App {
         };
         match expand {
             None => {}
-            Some(ExpandSpec::All) => {
+            Some(spec) => {
+                // Explicit expansion wants the whole tree present up front.
+                app.tree.index_all();
                 let branches: Vec<_> = app.tree.branches().collect();
                 for (id, parent) in branches {
-                    app.state.set_expanded(id, parent, true);
-                }
-            }
-            Some(ExpandSpec::Depth(n)) => {
-                let branches: Vec<_> = app.tree.branches().collect();
-                for (id, parent) in branches {
-                    if app.tree.depth(id) < n {
+                    let expand = match spec {
+                        ExpandSpec::All => true,
+                        ExpandSpec::Depth(n) => app.tree.depth(id) < n,
+                    };
+                    if expand {
                         app.state.set_expanded(id, parent, true);
                     }
                 }
+            }
+        }
+        // A single-rooted tree opens with its first level showing.
+        if app.tree.root_ids().len() == 1 {
+            let root = app.tree.root_ids()[0];
+            app.tree.ensure_children(root);
+            if !app.tree.is_leaf(root) {
+                app.state
+                    .set_expanded(root, app.tree.view_parent(root), true);
             }
         }
         app.state.ensure_projection(&app.tree, &app.query);
@@ -165,6 +180,13 @@ impl App {
     /// Handle a normalized key through the active mode and effective keymap.
     pub fn handle_key(&mut self, key: Key) -> Effect {
         let _span = crate::profile::span("app::handle_key");
+        // Only cancellation means anything while the index builds for `/`.
+        if let Mode::Indexing = self.mode {
+            if key == Key::parse("esc").unwrap() || key == Key::parse("ctrl+c").unwrap() {
+                self.mode = Mode::Normal;
+            }
+            return Effect::None;
+        }
         // A modal picker takes over key handling until it closes. Accepting
         // moves focus (expanding ancestors); cancelling leaves focus untouched,
         // so the user returns to exactly where they opened it.
@@ -218,6 +240,7 @@ impl App {
             }
             AppCommand::Expand => {
                 if let Some(id) = self.focused_id() {
+                    self.tree.ensure_children(id);
                     let parent = self.tree.view_parent(id);
                     if self.tree.is_leaf(id) {
                         // Nothing to open: step along to the next sibling.
@@ -241,6 +264,7 @@ impl App {
             }
             AppCommand::ExpandRecursively => {
                 if let Some(id) = self.focused_id() {
+                    self.tree.ensure_children(id);
                     if self.tree.is_leaf(id) {
                         // Nothing to open: step along to the next sibling.
                         self.move_sibling(1);
@@ -267,6 +291,7 @@ impl App {
             AppCommand::ToggleRecursively => self.toggle_focused(true),
             AppCommand::Select => {
                 if let Some(id) = self.focused_id() {
+                    self.tree.ensure_children(id);
                     if self.tree.is_leaf(id) {
                         return Effect::PrintAndExit(self.tree.output(id));
                     }
@@ -280,9 +305,7 @@ impl App {
             }
             AppCommand::AcceptAlternate => {
                 if let Some(id) = self.focused_id() {
-                    return Effect::PrintAndExit(
-                        self.tree.alternate_output(id),
-                    );
+                    return Effect::PrintAndExit(self.tree.alternate_output(id));
                 }
             }
             AppCommand::Descend => {
@@ -315,7 +338,13 @@ impl App {
                 self.state.select_last();
             }
             AppCommand::Jump => {
-                self.mode = Mode::Jump(Jump::open(&self.tree));
+                // The picker only ever sees a complete index; block on the
+                // progress screen until the sweep catches up.
+                if self.tree.fully_indexed() {
+                    self.mode = Mode::Jump(Jump::open(&self.tree));
+                } else {
+                    self.mode = Mode::Indexing;
+                }
             }
             AppCommand::ToggleKeybindingPanel => self.keybinding_panel.toggle(),
             AppCommand::Quit => return Effect::Quit,
@@ -323,9 +352,44 @@ impl App {
         Effect::None
     }
 
-    /// The focused node if it is expandable.
+    /// The focused node if it is expandable, its children materialized.
     fn focused_branch(&mut self) -> Option<NodeId> {
-        self.focused_id().filter(|&id| !self.tree.is_leaf(id))
+        let id = self.focused_id()?;
+        self.tree.ensure_children(id);
+        (!self.tree.is_leaf(id)).then_some(id)
+    }
+
+    /// One cooperative quantum of index building, run by the event loop
+    /// between input polls: load what is on screen first, then advance the
+    /// arena-order sweep. Returns true while more work remains. This is the
+    /// background indexer — cooperative rather than threaded, so the tree
+    /// stays single-threaded and lock-free; a worker thread could later slot
+    /// in behind this same seam.
+    pub fn do_work(&mut self) -> bool {
+        let _span = crate::profile::span("app::do_work");
+        if !self.tree.fully_indexed() {
+            self.state.ensure_projection(&self.tree, &self.query);
+            let visible: Vec<NodeId> = self.state.visible_ids().collect();
+            let mut budget = WORK_QUANTUM;
+            for id in visible {
+                if budget == 0 {
+                    break;
+                }
+                if self.tree.ensure_children(id) {
+                    budget -= 1;
+                }
+            }
+            self.tree.index_some(budget);
+        }
+        if matches!(self.mode, Mode::Indexing) && self.tree.fully_indexed() {
+            self.mode = Mode::Jump(Jump::open(&self.tree));
+        }
+        !self.tree.fully_indexed()
+    }
+
+    /// Whether the event loop should keep scheduling work quanta.
+    pub fn has_work(&self) -> bool {
+        !self.tree.fully_indexed()
     }
 
     /// Flip the focused container's expansion, leaving focus on it. A leaf has
@@ -334,6 +398,7 @@ impl App {
     /// opening what is still shut underneath.
     fn toggle_focused(&mut self, recursive: bool) {
         let Some(id) = self.focused_id() else { return };
+        self.tree.ensure_children(id);
         if self.tree.is_leaf(id) {
             return;
         }
@@ -349,6 +414,9 @@ impl App {
     fn set_expanded_recursively(&mut self, root: NodeId, expanded: bool) {
         let mut stack = vec![root];
         while let Some(id) = stack.pop() {
+            if expanded {
+                self.tree.ensure_children(id);
+            }
             if !self.tree.is_leaf(id) {
                 self.state
                     .set_expanded(id, self.tree.view_parent(id), expanded);
@@ -364,6 +432,7 @@ impl App {
         if self.tree.view_root() == Some(id) {
             return;
         }
+        self.tree.ensure_children(id);
 
         self.root_history.push(self.tree.view_root());
         self.tree.set_view_root(Some(id));
@@ -1107,5 +1176,64 @@ mod tests {
         let mut app = App::new(tree, &config, None);
         app.handle_key(Key::parse("ctrl+p").unwrap());
         assert!(in_jump(&app));
+    }
+
+    #[test]
+    fn a_single_rooted_tree_opens_with_its_first_level_expanded() {
+        use crate::tree::ActionValues;
+        let mut tree = Tree::new();
+        let root = tree.push(None, "root", true, ActionValues::new("", "", ""));
+        tree.push(Some(root), "child", false, ActionValues::new("", "", ""));
+        let mut app = App::new(tree, &Config::default(), None);
+
+        assert_eq!(app.visible_names(), ["root", "child"]);
+        assert_eq!(focused_name(&mut app), "root");
+    }
+
+    #[test]
+    fn expanding_an_unindexed_container_materializes_its_children() {
+        let tree =
+            crate::json_tree::from_reader(r#"{"users": [1, 2], "n": 3}"#.as_bytes()).unwrap();
+        let mut app = App::new(tree, &Config::default(), None);
+        assert_eq!(app.visible_names(), ["users [2]", "n: 3"]);
+
+        app.handle_key(Key::parse("l").unwrap());
+
+        assert_eq!(
+            app.visible_names(),
+            ["users [2]", "[0]: 1", "[1]: 2", "n: 3"]
+        );
+    }
+
+    #[test]
+    fn jump_blocks_on_an_incomplete_index_and_opens_when_done() {
+        let tree =
+            crate::json_tree::from_reader(r#"{"a": {"b": 1}, "c": {"d": 2}}"#.as_bytes()).unwrap();
+        let mut app = App::new(tree, &Config::default(), None);
+        assert!(app.has_work());
+
+        app.handle_key(Key::parse("/").unwrap());
+        assert!(matches!(app.mode, Mode::Indexing));
+        // Keys other than cancel are ignored while the index builds.
+        assert_eq!(app.handle_key(Key::parse("j").unwrap()), Effect::None);
+        assert!(matches!(app.mode, Mode::Indexing));
+
+        while app.do_work() {}
+
+        assert!(matches!(app.mode, Mode::Jump(_)));
+        assert!(!app.has_work());
+    }
+
+    #[test]
+    fn escape_cancels_the_indexing_wait() {
+        let tree =
+            crate::json_tree::from_reader(r#"{"a": {"b": 1}, "c": {"d": 2}}"#.as_bytes()).unwrap();
+        let mut app = App::new(tree, &Config::default(), None);
+        app.handle_key(Key::parse("/").unwrap());
+        assert!(matches!(app.mode, Mode::Indexing));
+
+        app.handle_key(Key::parse("esc").unwrap());
+
+        assert!(matches!(app.mode, Mode::Normal));
     }
 }

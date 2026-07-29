@@ -57,6 +57,10 @@ fn run() -> Result<ExitCode, String> {
     let outcome = event_loop(&mut app, &mut tui);
     drop(tui);
 
+    for error in app.tree.errors() {
+        eprintln!("ite: {error}");
+    }
+
     if let Some(path) = ite_cli::profile::output_path() {
         ite_cli::profile::GLOBAL
             .write_to(std::path::Path::new(path))
@@ -164,7 +168,20 @@ fn event_loop(app: &mut App, tui: &mut Tui) -> std::io::Result<Outcome> {
                 ite_cli::ui::draw(app, area, frame.buffer_mut());
             })?;
         }
-        match handle_event(app, crossterm::event::read()?) {
+        // While the index is incomplete, alternate short input polls with
+        // cooperative work quanta; once complete, block on input as before.
+        let ready = if app.has_work() {
+            crossterm::event::poll(std::time::Duration::from_millis(2))?
+        } else {
+            true
+        };
+        let effect = if ready {
+            handle_event(app, crossterm::event::read()?)
+        } else {
+            app.do_work();
+            Effect::None
+        };
+        match effect {
             Effect::None => {}
             Effect::Quit => return Ok(Outcome::Quit),
             Effect::PrintAndExit(path) => return Ok(Outcome::Print(path)),

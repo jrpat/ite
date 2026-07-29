@@ -9,6 +9,7 @@
 use std::ffi::OsString;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use tui_treelistview::{TreeChildren, TreeModel, TreeRevision};
 
@@ -57,7 +58,7 @@ struct Explicit {
 }
 
 /// How a JSON node is addressed within its parent.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) enum JsonKey {
     /// The synthetic `$` root of a single-rooted document.
     Root,
@@ -81,7 +82,16 @@ enum Payload {
     Fs { file_name: OsString },
     /// A JSON value: its byte span in the retained input plus how it is
     /// addressed within its parent. Everything else is derived.
-    Json { span: Range<u32>, key: JsonKey },
+    /// `child_count` is the immediate-child count discovered when the parent
+    /// was scanned; `None` until known (unvalidated JSONL records).
+    Json {
+        span: Range<u32>,
+        key: JsonKey,
+        child_count: Option<u32>,
+    },
+    /// A span that failed to scan (a corrupt JSONL record): kept selectable,
+    /// rendered as an error leaf whose raw text is the alternate output.
+    JsonError { span: Range<u32>, key: JsonKey },
 }
 
 #[derive(Debug)]
@@ -90,6 +100,9 @@ struct Node {
     children: Vec<NodeId>,
     is_container: bool,
     depth: usize,
+    /// False while the node's children (or, for a pending scalar record, its
+    /// validation) have not been computed yet.
+    children_loaded: bool,
     payload: Payload,
 }
 
@@ -102,7 +115,14 @@ pub struct Tree {
     /// The scanned directory (canonicalized) filesystem paths derive from.
     fs_root: Option<PathBuf>,
     /// The raw JSON input document that `Payload::Json` spans index into.
-    json_source: Option<Vec<u8>>,
+    /// Shared so materialization can read it while appending nodes.
+    json_source: Option<Arc<Vec<u8>>>,
+    /// Nodes whose children/validation are still pending.
+    unloaded: usize,
+    /// Arena-order sweep position for [`Tree::index_some`].
+    cursor: NodeId,
+    /// Messages for spans that failed to scan, for the banner and exit report.
+    errors: Vec<String>,
 }
 
 impl Tree {
@@ -140,6 +160,7 @@ impl Tree {
         self.push_node(
             parent,
             is_container,
+            true,
             Payload::Explicit(Box::new(Explicit {
                 name: name.into(),
                 detail,
@@ -158,6 +179,7 @@ impl Tree {
         self.push_node(
             parent,
             is_container,
+            true,
             Payload::Fs {
                 file_name: file_name.into(),
             },
@@ -172,37 +194,68 @@ impl Tree {
         span: Range<u32>,
         key: JsonKey,
         is_container: bool,
+        child_count: Option<u32>,
+        children_loaded: bool,
     ) -> NodeId {
-        self.push_node(parent, is_container, Payload::Json { span, key })
-    }
-
-    /// Close a JSON container's span once its end offset is known.
-    pub(crate) fn set_json_span_end(&mut self, id: NodeId, end: u32) {
-        if let Payload::Json { span, .. } = &mut self.nodes[id].payload {
-            span.end = end;
-        }
+        self.push_node(
+            parent,
+            is_container,
+            children_loaded,
+            Payload::Json {
+                span,
+                key,
+                child_count,
+            },
+        )
     }
 
     /// Attach the input document the JSON spans index into.
-    pub(crate) fn set_json_source(&mut self, bytes: Vec<u8>) {
+    pub(crate) fn set_json_source(&mut self, bytes: Arc<Vec<u8>>) {
         self.json_source = Some(bytes);
     }
 
     /// Drop every node with id >= `len` (discarding a partially scanned JSONL
     /// record); nodes below `len` and their order are untouched.
     pub(crate) fn truncate(&mut self, len: usize) {
+        for node in &self.nodes[len.min(self.nodes.len())..] {
+            if !node.children_loaded {
+                self.unloaded -= 1;
+            }
+        }
         self.nodes.truncate(len);
         self.roots.retain(|&id| id < len);
         for node in &mut self.nodes {
             node.children.retain(|&id| id < len);
         }
+        self.cursor = self.cursor.min(len);
     }
 
     fn json_bytes(&self) -> &[u8] {
-        self.json_source.as_deref().unwrap_or(&[])
+        self.json_source
+            .as_ref()
+            .map_or(&[], |bytes| bytes.as_slice())
     }
 
-    fn push_node(&mut self, parent: Option<NodeId>, is_container: bool, payload: Payload) -> NodeId {
+    /// The shared input document, for materialization to read while pushing.
+    pub(crate) fn json_source_arc(&self) -> Option<Arc<Vec<u8>>> {
+        self.json_source.clone()
+    }
+
+    /// The byte span of a JSON (or error) node.
+    pub(crate) fn json_span(&self, id: NodeId) -> Option<Range<u32>> {
+        match &self.node(id).payload {
+            Payload::Json { span, .. } | Payload::JsonError { span, .. } => Some(span.clone()),
+            _ => None,
+        }
+    }
+
+    fn push_node(
+        &mut self,
+        parent: Option<NodeId>,
+        is_container: bool,
+        children_loaded: bool,
+        payload: Payload,
+    ) -> NodeId {
         let id = self.nodes.len();
         let depth = parent.map_or(0, |id| self.nodes[id].depth + 1);
         self.nodes.push(Node {
@@ -210,13 +263,91 @@ impl Tree {
             children: Vec::new(),
             is_container,
             depth,
+            children_loaded,
             payload,
         });
+        if !children_loaded {
+            self.unloaded += 1;
+        }
         match parent {
             Some(parent) => self.nodes[parent].children.push(id),
             None => self.roots.push(id),
         }
         id
+    }
+
+    /// Materialize the node's pending children (or validate a pending scalar
+    /// record). Returns true when work was actually done.
+    pub(crate) fn ensure_children(&mut self, id: NodeId) -> bool {
+        if self.nodes[id].children_loaded {
+            return false;
+        }
+        match self.nodes[id].payload {
+            Payload::Json { .. } => crate::json_tree::materialize(self, id),
+            _ => self.mark_children_loaded(id),
+        }
+        self.revision.advance();
+        true
+    }
+
+    /// Flip a node to loaded, keeping the pending-work counter accurate.
+    pub(crate) fn mark_children_loaded(&mut self, id: NodeId) {
+        if !self.nodes[id].children_loaded {
+            self.nodes[id].children_loaded = true;
+            self.unloaded -= 1;
+        }
+    }
+
+    /// Convert a node whose span failed to scan into a selectable error leaf
+    /// and record the message for the banner and the exit report.
+    pub(crate) fn set_json_error(&mut self, id: NodeId, message: String) {
+        let (span, key) = match &self.nodes[id].payload {
+            Payload::Json { span, key, .. } => (span.clone(), key.clone()),
+            _ => return,
+        };
+        self.nodes[id].payload = Payload::JsonError { span, key };
+        self.nodes[id].is_container = false;
+        self.mark_children_loaded(id);
+        self.errors.push(message);
+        self.revision.advance();
+    }
+
+    /// Advance the arena-order sweep, loading up to `budget` pending nodes.
+    /// Returns true when any work was done. The sweep together with
+    /// on-demand loading eventually visits every node, so a fully swept tree
+    /// has validated every byte of the input.
+    pub(crate) fn index_some(&mut self, budget: usize) -> bool {
+        let mut done = 0;
+        while done < budget && self.cursor < self.nodes.len() {
+            if self.nodes[self.cursor].children_loaded {
+                self.cursor += 1;
+            } else {
+                self.ensure_children(self.cursor);
+                done += 1;
+            }
+        }
+        done > 0
+    }
+
+    /// Run the sweep to completion (startup `--expand`, and tests).
+    pub(crate) fn index_all(&mut self) {
+        while self.index_some(usize::MAX) {}
+    }
+
+    /// True once every node's children are loaded and every span validated;
+    /// the jump picker requires this.
+    pub fn fully_indexed(&self) -> bool {
+        self.unloaded == 0
+    }
+
+    /// Nodes whose children/validation are still pending (progress display).
+    pub fn pending(&self) -> usize {
+        self.unloaded
+    }
+
+    /// Messages for spans that failed to scan, in discovery order.
+    pub fn errors(&self) -> &[String] {
+        &self.errors
     }
 
     fn node(&self, id: NodeId) -> &Node {
@@ -229,7 +360,11 @@ impl Tree {
         match &node.payload {
             Payload::Explicit(explicit) => explicit.name.clone(),
             Payload::Fs { file_name } => file_name.to_string_lossy().into_owned(),
-            Payload::Json { span, key } => {
+            Payload::Json {
+                span,
+                key,
+                child_count,
+            } => {
                 let bytes = self.json_bytes();
                 let prefix = match key {
                     JsonKey::Root | JsonKey::JsonlRoot => "$".to_owned(),
@@ -237,20 +372,40 @@ impl Tree {
                     JsonKey::Index(index) => format!("[{index}]"),
                 };
                 if node.is_container {
-                    let count = node.children.len();
+                    // Loaded containers count their children; unloaded ones
+                    // fall back to the count discovered when their parent was
+                    // scanned, and show `…` when even that is pending
+                    // (unvalidated JSONL records).
+                    let count = if node.children_loaded {
+                        Some(node.children.len() as u32)
+                    } else {
+                        *child_count
+                    };
                     // The JSONL root is a virtual array whatever its first
                     // record's first byte happens to be.
-                    let object = !matches!(key, JsonKey::JsonlRoot)
-                        && bytes[span.start as usize] == b'{';
+                    let object =
+                        !matches!(key, JsonKey::JsonlRoot) && bytes[span.start as usize] == b'{';
                     match (object, count) {
-                        (true, 0) => format!("{prefix} {{}}"),
-                        (true, count) => format!("{prefix} {{{count}}}"),
-                        (false, 0) => format!("{prefix} []"),
-                        (false, count) => format!("{prefix} [{count}]"),
+                        (true, Some(0)) => format!("{prefix} {{}}"),
+                        (true, Some(count)) => format!("{prefix} {{{count}}}"),
+                        (true, None) => format!("{prefix} {{…}}"),
+                        (false, Some(0)) => format!("{prefix} []"),
+                        (false, Some(count)) => format!("{prefix} [{count}]"),
+                        (false, None) => format!("{prefix} […]"),
                     }
                 } else {
                     format!("{prefix}: {}", crate::json_tree::value_text(bytes, span))
                 }
+            }
+            Payload::JsonError { key, .. } => {
+                let prefix = match key {
+                    JsonKey::Root | JsonKey::JsonlRoot => "$".to_owned(),
+                    JsonKey::Member { key_span } => {
+                        crate::json_tree::key_text(self.json_bytes(), key_span)
+                    }
+                    JsonKey::Index(index) => format!("[{index}]"),
+                };
+                format!("{prefix} ⚠")
             }
         }
     }
@@ -272,11 +427,23 @@ impl Tree {
                         Payload::Json {
                             span,
                             key: JsonKey::Member { key_span },
+                            ..
                         } if !child.is_container => Some((key_span.clone(), span.clone())),
                         _ => None,
                     }
                 });
                 crate::json_tree::object_preview(bytes, members)
+            }
+            Payload::JsonError { span, .. } => {
+                let mut text = crate::json_tree::raw_text(self.json_bytes(), span);
+                if text.len() > 512 {
+                    let mut end = 512;
+                    while !text.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    text.truncate(end);
+                }
+                Some(text)
             }
         }
     }
@@ -305,7 +472,9 @@ impl Tree {
         match &self.node(id).payload {
             Payload::Explicit(explicit) => explicit.action.output.clone(),
             Payload::Fs { .. } => self.fs_path(id),
-            Payload::Json { .. } => self.json_pointer_from(id, false).into(),
+            Payload::Json { .. } | Payload::JsonError { .. } => {
+                self.json_pointer_from(id, false).into()
+            }
         }
     }
 
@@ -317,6 +486,9 @@ impl Tree {
             Payload::Json { span, .. } => {
                 crate::json_tree::value_text(self.json_bytes(), span).into()
             }
+            Payload::JsonError { span, .. } => {
+                crate::json_tree::raw_text(self.json_bytes(), span).into()
+            }
         }
     }
 
@@ -325,7 +497,9 @@ impl Tree {
         match &self.node(id).payload {
             Payload::Explicit(explicit) => explicit.action.path.clone(),
             Payload::Fs { .. } => self.fs_path(id),
-            Payload::Json { .. } => self.json_pointer_from(id, false).into(),
+            Payload::Json { .. } | Payload::JsonError { .. } => {
+                self.json_pointer_from(id, false).into()
+            }
         }
     }
 
@@ -336,7 +510,9 @@ impl Tree {
         match &self.node(id).payload {
             Payload::Explicit(explicit) => explicit.action.relpath.clone(),
             Payload::Fs { .. } => self.fs_relpath(id).into_os_string(),
-            Payload::Json { .. } => self.json_pointer_from(id, true).into(),
+            Payload::Json { .. } | Payload::JsonError { .. } => {
+                self.json_pointer_from(id, true).into()
+            }
         }
     }
 
@@ -346,7 +522,7 @@ impl Tree {
     /// repeats across records.
     pub fn jump_key(&self, id: NodeId) -> String {
         match &self.node(id).payload {
-            Payload::Json { .. } => self.json_pointer_from(id, false),
+            Payload::Json { .. } | Payload::JsonError { .. } => self.json_pointer_from(id, false),
             _ => self.relpath(id).to_string_lossy().into_owned(),
         }
     }
@@ -381,7 +557,7 @@ impl Tree {
         let mut cursor = Some(id);
         while let Some(current) = cursor {
             let node = self.node(current);
-            let Payload::Json { key, .. } = &node.payload else {
+            let (Payload::Json { key, .. } | Payload::JsonError { key, .. }) = &node.payload else {
                 break;
             };
             if within_record && self.is_jsonl_record(current) {
@@ -466,9 +642,23 @@ impl Tree {
         false
     }
 
-    /// True when the node cannot be expanded.
+    /// True when the node cannot be expanded. An unloaded container is not a
+    /// leaf (it may still expand) unless its discovered child count is zero.
     pub fn is_leaf(&self, id: NodeId) -> bool {
-        self.node(id).children.is_empty()
+        let node = self.node(id);
+        if !node.is_container {
+            return true;
+        }
+        if node.children_loaded {
+            return node.children.is_empty();
+        }
+        matches!(
+            node.payload,
+            Payload::Json {
+                child_count: Some(0),
+                ..
+            }
+        )
     }
 
     /// All expandable nodes as `(id, parent)` pairs, in tree order.
@@ -509,7 +699,12 @@ impl TreeModel for Tree {
     }
 
     fn children(&self, id: NodeId) -> TreeChildren<'_, NodeId> {
-        TreeChildren::loaded(&self.nodes[id].children)
+        let node = &self.nodes[id];
+        if node.is_container && !node.children_loaded && !self.is_leaf(id) {
+            TreeChildren::Unloaded
+        } else {
+            TreeChildren::loaded(&node.children)
+        }
     }
 
     fn revision(&self) -> TreeRevision {
@@ -528,7 +723,12 @@ mod tests {
 
     fn sample() -> (Tree, NodeId, NodeId, NodeId) {
         let mut tree = Tree::new();
-        let dir = tree.push(None, "dir", true, ActionValues::new("dir", "/abs/dir", "dir"));
+        let dir = tree.push(
+            None,
+            "dir",
+            true,
+            ActionValues::new("dir", "/abs/dir", "dir"),
+        );
         let file = tree.push_with_detail(
             Some(dir),
             "file",
@@ -537,7 +737,12 @@ mod tests {
             ActionValues::new("dir/file", "/abs/dir/file", "dir/file")
                 .with_alternate_output("file"),
         );
-        let leaf = tree.push(None, "leaf", false, ActionValues::new("leaf", "/abs/leaf", "leaf"));
+        let leaf = tree.push(
+            None,
+            "leaf",
+            false,
+            ActionValues::new("leaf", "/abs/leaf", "leaf"),
+        );
         (tree, dir, file, leaf)
     }
 

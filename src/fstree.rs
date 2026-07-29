@@ -121,7 +121,10 @@ mod tests {
         let inner = tree.children_of(b_dir)[0];
         assert!(Path::new(&tree.path(inner)).is_absolute());
         assert!(Path::new(&tree.path(inner)).ends_with("b-dir/inner.txt"));
-        assert_eq!(tree.relpath(inner), Path::new("b-dir/inner.txt").as_os_str());
+        assert_eq!(
+            tree.relpath(inner),
+            Path::new("b-dir/inner.txt").as_os_str()
+        );
         assert_eq!(
             tree.alternate_output(inner),
             std::ffi::OsStr::new("inner.txt")

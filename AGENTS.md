@@ -67,21 +67,36 @@ stdout and exits. The TUI renders on **stderr** so stdout can be piped.
   the basename. Nodes store only the raw file name; paths are derived by
   ancestor-join from the canonicalized scan root.
 - `src/json_tree.rs` — the complete JSON boundary: reads the input to the
-  end, detects JSON vs JSONL from the content, and structurally scans byte
-  spans into the retained bytes (no serde DOM is kept; serde parses only
-  scalars/keys during derivation). Object members retain input order (and
-  duplicate keys), arrays use indexed children, default output and `$path`
-  are canonical JSON Pointers, `$relpath` is the within-record pointer for
-  JSONL, and alternate output is compact JSON re-serialized from the span.
-  JSONL: one record per non-blank line under a virtual array root, indices
-  are record ordinals, a malformed record fails the load except a truncated
-  final record, which is dropped. The derivation helpers at the bottom are
-  what `Tree`'s accessors call; no JSON values escape this module.
+  end, detects JSON vs JSONL from the content, and discovers structure
+  *shallowly* into the retained bytes (no serde DOM is kept; serde parses
+  only scalars/keys during derivation). Scanning a container records only
+  its immediate children's spans — each child subtree is structurally
+  skipped, which validates it and yields its child count for free; deeper
+  levels materialize on demand via `materialize`, the single work unit
+  behind expansion and the app's background sweep. Object members retain
+  input order (and duplicate keys), arrays use indexed children, default
+  output and `$path` are canonical JSON Pointers, `$relpath` is the
+  within-record pointer for JSONL, and alternate output is compact JSON
+  re-serialized from the span. JSONL startup is just the newline scan: one
+  record per non-blank line under a virtual array root (ordinal indices,
+  `{…}` counts until validated); a truncated final record is dropped
+  eagerly, while any other corrupt record surfaces during validation as a
+  selectable ⚠ error leaf plus a banner message and stderr on exit. The
+  derivation helpers at the bottom are what `Tree`'s accessors call; no
+  JSON values escape this module.
 - `src/app.rs` — `App`: keymap resolution (defaults + user overrides, `gg`
   chord; `?` is reserved for the keybinding panel) and `AppCommand` execution
   against `TreeListViewState`. Returns `Effect` (`Quit` / `PrintAndExit` /
-  `RunShell`); no I/O here. Holds a `Mode` (`Normal` / `Jump`); a modal picker
-  takes over key handling in `handle_key` until it closes.
+  `RunShell`); no I/O here. Holds a `Mode` (`Normal` / `Jump` / `Indexing`);
+  a modal picker takes over key handling in `handle_key` until it closes. `/`
+  opens the picker only over a complete index — `Mode::Indexing` shows
+  blocking progress until the sweep finishes. `App::do_work` is one
+  cooperative quantum of index building (visible rows first, then the
+  arena-order sweep), scheduled by the event loop between input polls; it is
+  deliberately cooperative rather than threaded so the tree stays
+  single-threaded and unit-testable — a worker thread could later slot in
+  behind the same seam. Single-rooted trees open with their first level
+  expanded.
 - `src/keybindings.rs` — the keybinding panel: the reserved `?`/`esc` key
   constants, display entries derived once at startup from the effective keymap
   (`build_entries`), the column-grid layout, and the panel's open/scroll/

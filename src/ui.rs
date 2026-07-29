@@ -343,12 +343,16 @@ pub fn draw(app: &mut App, area: Rect, buf: &mut Buffer) {
         }
         return;
     }
+    if let Mode::Indexing = app.mode {
+        render_indexing(&app.tree, area, buf);
+        return;
+    }
 
     let panel = app
         .keybinding_panel
         .is_open()
         .then(|| keybinding_panel_layout(&app.panel_entries, area));
-    let tree_area = match &panel {
+    let mut tree_area = match &panel {
         Some(layout) => Rect::new(
             area.x,
             area.y,
@@ -357,6 +361,27 @@ pub fn draw(app: &mut App, area: Rect, buf: &mut Buffer) {
         ),
         None => area,
     };
+
+    // Corrupt spans surface as a persistent banner; the tree shifts down
+    // within the viewport left above the keybinding panel.
+    if !app.tree.errors().is_empty() && tree_area.height > 0 {
+        let banner = format!(
+            "⚠ {} invalid record(s) — details on stderr at exit",
+            app.tree.errors().len()
+        );
+        buf.set_stringn(
+            tree_area.x,
+            tree_area.y,
+            &banner,
+            tree_area.width as usize,
+            Style::default().fg(Color::Red),
+        );
+        tree_area = Rect {
+            y: tree_area.y + 1,
+            height: tree_area.height - 1,
+            ..tree_area
+        };
+    }
     app.page_height = tree_area.height as usize;
     {
         let _span = crate::profile::span("ui::ensure_projection");
@@ -373,6 +398,26 @@ pub fn draw(app: &mut App, area: Rect, buf: &mut Buffer) {
     if let Some(layout) = panel {
         render_keybinding_panel(app, &layout, buf);
     }
+}
+
+/// The blocking progress screen shown when `/` is pressed before the index
+/// completes: one dim status line, esc to cancel back to the tree.
+fn render_indexing(tree: &crate::tree::Tree, area: Rect, buf: &mut Buffer) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let status = format!(
+        "indexing… {} nodes · {} pending · esc cancels",
+        tree.len(),
+        tree.pending()
+    );
+    buf.set_stringn(
+        area.x,
+        area.y,
+        &status,
+        area.width as usize,
+        Style::default().fg(Color::DarkGray),
+    );
 }
 
 /// The jump picker's placement. Today it is the whole screen; moving it to a
@@ -690,7 +735,8 @@ mod tests {
         let (buf, text) = drawn(&mut app, 60, 1);
 
         assert!(
-            text.starts_with(r#"▶ project {4} name: "ite" · status: "experimental""#),
+            // Single-rooted trees open expanded, so the root shows ▼.
+            text.starts_with(r#"▼ project {4} name: "ite" · status: "experimental""#),
             "{text}"
         );
         let primary = &buf[(2, 0)];

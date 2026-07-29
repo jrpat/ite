@@ -1,15 +1,20 @@
 //! Transforms JSON input into source-neutral tree data.
 //!
-//! The complete JSON boundary: the input document is read to the end, a
-//! structural scan indexes every value's byte span, and the tree retains the
-//! raw bytes. Labels, previews, pointers, and outputs are derived from the
-//! spans on demand through the crate-private helpers at the bottom, so no
-//! second representation of the document is stored. No JSON values escape
-//! this module.
+//! The complete JSON boundary: the input document is read to the end and the
+//! tree retains the raw bytes. Structure is discovered *shallowly*: scanning
+//! a container records only its immediate children's byte spans (each child's
+//! subtree is structurally skipped, which validates it and yields its child
+//! count for free); deeper levels materialize on demand through
+//! [`materialize`], driven by expansion or the app's background sweep. JSONL
+//! defers even record validation — the newline scan is the only startup cost —
+//! so corrupt records surface later as error nodes rather than load failures.
+//! Labels, previews, pointers, and outputs are derived from spans through the
+//! crate-private helpers at the bottom. No JSON values escape this module.
 
 use std::fmt;
 use std::io::{self, Read, Write};
 use std::ops::Range;
+use std::sync::Arc;
 
 use serde_json::Value;
 
@@ -97,12 +102,8 @@ fn detect_jsonl(bytes: &[u8]) -> bool {
 
 /// Whether `bytes` holds exactly one complete JSON value (plus whitespace).
 fn is_complete_value(bytes: &[u8]) -> bool {
-    let mut throwaway = Tree::new();
     let mut scanner = Scanner::new(bytes);
-    if scanner
-        .scan_value(&mut throwaway, None, JsonKey::Root)
-        .is_err()
-    {
+    if scanner.skip_value().is_err() {
         return false;
     }
     scanner.skip_ws();
@@ -112,49 +113,111 @@ fn is_complete_value(bytes: &[u8]) -> bool {
 fn json_from_bytes(bytes: Vec<u8>) -> Result<Tree, Error> {
     let mut tree = Tree::new();
     let mut scanner = Scanner::new(&bytes);
-    scan_document(&mut scanner, &mut tree)?;
+    scanner.skip_ws();
+    let mut single_root = None;
+    // A non-empty top-level object spreads its members as forest roots (how
+    // the tree has always presented documents); every other document gets a
+    // single `$` root.
+    let spread = scanner.peek() == Some(b'{') && {
+        let probe = scanner.pos;
+        scanner.pos += 1;
+        scanner.skip_ws();
+        let has_members = scanner.peek() != Some(b'}');
+        scanner.pos = probe;
+        has_members
+    };
+    if spread {
+        scanner.scan_members_shallow(&mut tree, None)?;
+    } else {
+        single_root = Some(scanner.scan_child(&mut tree, None, JsonKey::Root)?);
+    }
     scanner.skip_ws();
     if scanner.pos != bytes.len() {
         return Err(scanner.syntax_error("trailing characters"));
     }
-    tree.set_json_source(bytes);
+    tree.set_json_source(Arc::new(bytes));
+    // A single-rooted document opens with its first level showing, so build
+    // that level now; the skip above already validated the whole document.
+    if let Some(root) = single_root {
+        tree.ensure_children(root);
+    }
     Ok(tree)
 }
 
 /// Build the JSONL tree: a virtual array root over one record per non-blank
-/// line. Indices are record ordinals, not line numbers (error messages carry
-/// line numbers). A final record that fails to scan — the classic truncated
-/// tail — is dropped; a malformed record anywhere else fails the load.
+/// line, discovered by the newline scan alone — records are not parsed here.
+/// Indices are record ordinals, not line numbers (error messages carry line
+/// numbers). The classic corruption is a truncated final record, so only the
+/// tail is validated eagerly and dropped when it does not scan; any other
+/// corrupt record surfaces later as an error node with a banner message.
 fn jsonl_from_bytes(bytes: Vec<u8>) -> Result<Tree, Error> {
+    let mut lines = non_blank_lines(&bytes);
+    if let Some(last) = lines.last()
+        && !is_complete_value(&bytes[last.clone()])
+    {
+        lines.pop();
+    }
     let mut tree = Tree::new();
-    let root = tree.push_json(None, 0..bytes.len() as u32, JsonKey::JsonlRoot, true);
-    let lines = non_blank_lines(&bytes);
+    let root = tree.push_json(
+        None,
+        0..bytes.len() as u32,
+        JsonKey::JsonlRoot,
+        true,
+        Some(lines.len() as u32),
+        true,
+    );
     for (ordinal, line) in lines.iter().enumerate() {
-        let mark = tree.len();
-        // Bound the scanner to the record's line so inter-token whitespace
-        // cannot swallow the next line's bytes.
-        let mut scanner = Scanner::new(&bytes[..line.end]);
-        scanner.pos = line.start;
-        let scanned = scanner
-            .scan_value(&mut tree, Some(root), JsonKey::Index(ordinal as u32))
-            .and_then(|_| {
-                scanner.skip_ws();
-                if scanner.pos == line.end {
-                    Ok(())
-                } else {
-                    Err(scanner.syntax_error("trailing characters"))
-                }
-            });
-        if let Err(error) = scanned {
-            if ordinal == lines.len() - 1 {
-                tree.truncate(mark);
-            } else {
-                return Err(error);
-            }
+        let span = trim_ws(&bytes, line.clone());
+        let is_container = matches!(bytes[span.start], b'{' | b'[');
+        tree.push_json(
+            Some(root),
+            span.start as u32..span.end as u32,
+            JsonKey::Index(ordinal as u32),
+            is_container,
+            None,
+            false,
+        );
+    }
+    tree.set_json_source(Arc::new(bytes));
+    Ok(tree)
+}
+
+/// Load the immediate children of JSON node `id` — or, for a pending scalar
+/// record, validate it — converting the node to an error leaf when its span
+/// does not scan. The single work unit behind on-demand expansion and the
+/// arena sweep.
+pub(crate) fn materialize(tree: &mut Tree, id: NodeId) {
+    let (Some(bytes), Some(span)) = (tree.json_source_arc(), tree.json_span(id)) else {
+        tree.mark_children_loaded(id);
+        return;
+    };
+    let end = span.end as usize;
+    let mark = tree.len();
+    let mut scanner = Scanner::new(&bytes[..end]);
+    scanner.pos = span.start as usize;
+    match scan_span(&mut scanner, tree, id, end) {
+        Ok(()) => tree.mark_children_loaded(id),
+        Err(error) => {
+            tree.truncate(mark);
+            tree.set_json_error(id, error.to_string());
         }
     }
-    tree.set_json_source(bytes);
-    Ok(tree)
+}
+
+fn scan_span(scanner: &mut Scanner, tree: &mut Tree, id: NodeId, end: usize) -> Result<(), Error> {
+    scanner.skip_ws();
+    match scanner.peek() {
+        Some(b'{') => scanner.scan_members_shallow(tree, Some(id))?,
+        Some(b'[') => scanner.scan_elements_shallow(tree, id)?,
+        _ => {
+            scanner.scan_scalar()?;
+        }
+    }
+    scanner.skip_ws();
+    if scanner.pos != end {
+        return Err(scanner.syntax_error("trailing characters"));
+    }
+    Ok(())
 }
 
 /// Byte ranges of the lines holding non-whitespace content, in order.
@@ -180,22 +243,14 @@ fn push_if_non_blank(bytes: &[u8], range: Range<usize>, lines: &mut Vec<Range<us
     }
 }
 
-/// Scan the document, pushing nodes. A non-empty top-level object spreads its
-/// members as forest roots (how the tree has always presented documents);
-/// every other document gets a single `$` root.
-fn scan_document(scanner: &mut Scanner, tree: &mut Tree) -> Result<(), Error> {
-    scanner.skip_ws();
-    if scanner.peek() == Some(b'{') {
-        let probe = scanner.pos;
-        scanner.pos += 1;
-        scanner.skip_ws();
-        let has_members = scanner.peek() != Some(b'}');
-        scanner.pos = probe;
-        if has_members {
-            return scanner.scan_object_members(tree, None);
-        }
+fn trim_ws(bytes: &[u8], mut range: Range<usize>) -> Range<usize> {
+    while range.start < range.end && matches!(bytes[range.start], b' ' | b'\t' | b'\r') {
+        range.start += 1;
     }
-    scanner.scan_value(tree, None, JsonKey::Root).map(|_| ())
+    while range.end > range.start && matches!(bytes[range.end - 1], b' ' | b'\t' | b'\r') {
+        range.end -= 1;
+    }
+    range
 }
 
 /// A structural scanner: validates the document grammar while recording byte
@@ -239,42 +294,12 @@ impl<'a> Scanner<'a> {
     fn syntax_error(&self, message: &str) -> Error {
         let consumed = &self.bytes[..self.pos.min(self.bytes.len())];
         let line = 1 + consumed.iter().filter(|&&b| b == b'\n').count();
-        let line_start = consumed.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
+        let line_start = consumed
+            .iter()
+            .rposition(|&b| b == b'\n')
+            .map_or(0, |i| i + 1);
         let column = self.pos - line_start + 1;
         Error(format!("{message} at line {line} column {column}"))
-    }
-
-    /// Scan one complete value, pushing its node (and its descendants').
-    fn scan_value(
-        &mut self,
-        tree: &mut Tree,
-        parent: Option<NodeId>,
-        key: JsonKey,
-    ) -> Result<NodeId, Error> {
-        self.skip_ws();
-        let start = self.pos as u32;
-        match self.peek() {
-            Some(b'{') => {
-                let id = tree.push_json(parent, start..start, key, true);
-                self.descend()?;
-                self.scan_object_members(tree, Some(id))?;
-                self.depth -= 1;
-                tree.set_json_span_end(id, self.pos as u32);
-                Ok(id)
-            }
-            Some(b'[') => {
-                let id = tree.push_json(parent, start..start, key, true);
-                self.descend()?;
-                self.scan_array_elements(tree, id)?;
-                self.depth -= 1;
-                tree.set_json_span_end(id, self.pos as u32);
-                Ok(id)
-            }
-            _ => {
-                self.scan_scalar()?;
-                Ok(tree.push_json(parent, start..self.pos as u32, key, false))
-            }
-        }
     }
 
     fn descend(&mut self) -> Result<(), Error> {
@@ -285,9 +310,32 @@ impl<'a> Scanner<'a> {
         Ok(())
     }
 
-    /// Scan `{ "key": value, ... }`, pushing each member under `parent`
-    /// (`None` spreads the members as forest roots).
-    fn scan_object_members(&mut self, tree: &mut Tree, parent: Option<NodeId>) -> Result<(), Error> {
+    /// Scan one child value shallowly: skip (and validate) its whole span,
+    /// then record a single node carrying the span and the discovered
+    /// immediate-child count. Container children start unloaded unless empty.
+    fn scan_child(
+        &mut self,
+        tree: &mut Tree,
+        parent: Option<NodeId>,
+        key: JsonKey,
+    ) -> Result<NodeId, Error> {
+        self.skip_ws();
+        let start = self.pos as u32;
+        let child_count = self.skip_value()?;
+        let span = start..self.pos as u32;
+        Ok(match child_count {
+            Some(count) => tree.push_json(parent, span, key, true, Some(count), count == 0),
+            None => tree.push_json(parent, span, key, false, None, true),
+        })
+    }
+
+    /// Scan `{ "key": value, ... }`, pushing each member shallowly under
+    /// `parent` (`None` spreads the members as forest roots).
+    fn scan_members_shallow(
+        &mut self,
+        tree: &mut Tree,
+        parent: Option<NodeId>,
+    ) -> Result<(), Error> {
         self.expect(b'{')?;
         self.skip_ws();
         if self.peek() == Some(b'}') {
@@ -301,7 +349,7 @@ impl<'a> Scanner<'a> {
             let key_span = key_start..self.pos as u32;
             self.skip_ws();
             self.expect(b':')?;
-            self.scan_value(tree, parent, JsonKey::Member { key_span })?;
+            self.scan_child(tree, parent, JsonKey::Member { key_span })?;
             self.skip_ws();
             match self.peek() {
                 Some(b',') => self.pos += 1,
@@ -314,7 +362,7 @@ impl<'a> Scanner<'a> {
         }
     }
 
-    fn scan_array_elements(&mut self, tree: &mut Tree, parent: NodeId) -> Result<(), Error> {
+    fn scan_elements_shallow(&mut self, tree: &mut Tree, parent: NodeId) -> Result<(), Error> {
         self.expect(b'[')?;
         self.skip_ws();
         if self.peek() == Some(b']') {
@@ -323,7 +371,7 @@ impl<'a> Scanner<'a> {
         }
         let mut index = 0;
         loop {
-            self.scan_value(tree, Some(parent), JsonKey::Index(index))?;
+            self.scan_child(tree, Some(parent), JsonKey::Index(index))?;
             index += 1;
             self.skip_ws();
             match self.peek() {
@@ -337,6 +385,80 @@ impl<'a> Scanner<'a> {
         }
     }
 
+    /// Skip one complete value without recording nodes, returning the
+    /// immediate-child count for containers (`None` for scalars).
+    fn skip_value(&mut self) -> Result<Option<u32>, Error> {
+        self.skip_ws();
+        match self.peek() {
+            Some(b'{') => {
+                self.descend()?;
+                let count = self.skip_object()?;
+                self.depth -= 1;
+                Ok(Some(count))
+            }
+            Some(b'[') => {
+                self.descend()?;
+                let count = self.skip_array()?;
+                self.depth -= 1;
+                Ok(Some(count))
+            }
+            _ => {
+                self.scan_scalar()?;
+                Ok(None)
+            }
+        }
+    }
+
+    fn skip_object(&mut self) -> Result<u32, Error> {
+        self.expect(b'{')?;
+        self.skip_ws();
+        if self.peek() == Some(b'}') {
+            self.pos += 1;
+            return Ok(0);
+        }
+        let mut count = 0;
+        loop {
+            self.skip_ws();
+            self.scan_string()?;
+            self.skip_ws();
+            self.expect(b':')?;
+            self.skip_value()?;
+            count += 1;
+            self.skip_ws();
+            match self.peek() {
+                Some(b',') => self.pos += 1,
+                Some(b'}') => {
+                    self.pos += 1;
+                    return Ok(count);
+                }
+                _ => return Err(self.syntax_error("expected `,` or `}`")),
+            }
+        }
+    }
+
+    fn skip_array(&mut self) -> Result<u32, Error> {
+        self.expect(b'[')?;
+        self.skip_ws();
+        if self.peek() == Some(b']') {
+            self.pos += 1;
+            return Ok(0);
+        }
+        let mut count = 0;
+        loop {
+            self.skip_value()?;
+            count += 1;
+            self.skip_ws();
+            match self.peek() {
+                Some(b',') => self.pos += 1,
+                Some(b']') => {
+                    self.pos += 1;
+                    return Ok(count);
+                }
+                _ => return Err(self.syntax_error("expected `,` or `]`")),
+            }
+        }
+    }
+
     fn scan_scalar(&mut self) -> Result<(), Error> {
         match self.peek() {
             Some(b'"') => self.scan_string(),
@@ -344,7 +466,9 @@ impl<'a> Scanner<'a> {
             Some(b'f') => self.scan_literal("false"),
             Some(b'n') => self.scan_literal("null"),
             Some(b'-' | b'0'..=b'9') => self.scan_number(),
-            Some(other) => Err(self.syntax_error(&format!("unexpected character `{}`", other as char))),
+            Some(other) => {
+                Err(self.syntax_error(&format!("unexpected character `{}`", other as char)))
+            }
             None => Err(self.syntax_error("unexpected end of input")),
         }
     }
@@ -454,6 +578,11 @@ pub(crate) fn value_text(bytes: &[u8], span: &Range<u32>) -> String {
         }
         Err(_) => String::from_utf8_lossy(raw).into_owned(),
     }
+}
+
+/// The verbatim (lossy) text of a raw span — error nodes' outputs.
+pub(crate) fn raw_text(bytes: &[u8], span: &Range<u32>) -> String {
+    String::from_utf8_lossy(slice(bytes, span)).into_owned()
 }
 
 pub(crate) fn append_pointer(parent: &str, token: &str) -> String {
@@ -584,8 +713,12 @@ mod tests {
 
     const DEMO_JSON: &str = include_str!("../examples/sample.json");
 
+    /// Parse and run the sweep to completion: structure-shape tests want the
+    /// whole tree present, exactly as the app sees it moments after startup.
     fn parse(json: &str) -> Tree {
-        from_reader(json.as_bytes()).unwrap()
+        let mut tree = from_reader(json.as_bytes()).unwrap();
+        tree.index_all();
+        tree
     }
 
     fn names(tree: &Tree, ids: &[usize]) -> Vec<String> {
@@ -610,6 +743,39 @@ mod tests {
         assert!(tree.is_container(tree.root_ids()[0]));
         assert!(tree.is_container(tree.root_ids()[1]));
         assert!(tree.is_leaf(tree.root_ids()[1]));
+    }
+
+    #[test]
+    fn json_containers_load_lazily_with_discovered_counts() {
+        let mut tree =
+            from_reader(r#"{"users": [{"id": 1}, {"id": 2}], "n": 3}"#.as_bytes()).unwrap();
+        let users = tree.root_ids()[0];
+
+        // The count was discovered while skipping the subtree, but no child
+        // nodes exist yet and the node still reads as expandable.
+        assert_eq!(tree.name(users), "users [2]");
+        assert!(tree.children_of(users).is_empty());
+        assert!(!tree.is_leaf(users));
+        assert!(!tree.fully_indexed());
+
+        assert!(tree.ensure_children(users));
+        assert_eq!(tree.children_of(users).len(), 2);
+        assert!(!tree.ensure_children(users), "loading is idempotent");
+
+        tree.index_all();
+        assert!(tree.fully_indexed());
+        assert!(tree.errors().is_empty());
+    }
+
+    #[test]
+    fn single_rooted_documents_materialize_level_one() {
+        let tree = from_reader("[1, [2], 3]".as_bytes()).unwrap();
+        let root = tree.root_ids()[0];
+        assert_eq!(tree.name(root), "$ [3]");
+        assert_eq!(
+            names(&tree, tree.children_of(root)),
+            ["[0]: 1", "[1] [1]", "[2]: 3"]
+        );
     }
 
     #[test]
@@ -752,6 +918,16 @@ mod tests {
     }
 
     #[test]
+    fn jsonl_records_start_unvalidated_and_show_pending_counts() {
+        let tree = from_reader("{\"a\": 1}\n{\"a\": 2}\n".as_bytes()).unwrap();
+        let root = tree.root_ids()[0];
+
+        assert_eq!(tree.name(root), "$ [2]");
+        assert!(!tree.fully_indexed());
+        assert_eq!(names(&tree, tree.children_of(root)), ["[0] {…}", "[1] {…}"]);
+    }
+
+    #[test]
     fn jsonl_detection_accepts_scalar_records() {
         // Valid JSONL, invalid JSON — two number records.
         let tree = parse("1\n2\n");
@@ -791,9 +967,34 @@ mod tests {
     }
 
     #[test]
-    fn jsonl_fails_loudly_on_a_malformed_middle_record() {
-        let error = from_reader("{\"a\": 1}\nxxx\n{\"b\": 2}\n".as_bytes()).unwrap_err();
-        assert!(error.to_string().starts_with("invalid JSON input:"));
+    fn jsonl_surfaces_a_malformed_middle_record_as_an_error_node() {
+        // Under lazy validation a corrupt record no longer fails the load; it
+        // becomes a selectable error leaf plus a banner/exit message, and its
+        // neighbors are untouched.
+        let mut tree = from_reader("{\"a\": 1}\nxxx\n{\"b\": 2}\n".as_bytes()).unwrap();
+        tree.index_all();
+        let root = tree.root_ids()[0];
+        let records = tree.children_of(root).to_vec();
+
+        assert_eq!(records.len(), 3);
+        assert_eq!(tree.name(records[0]), "[0] {1}");
+        assert_eq!(tree.name(records[1]), "[1] ⚠");
+        assert_eq!(tree.detail(records[1]).as_deref(), Some("xxx"));
+        assert_eq!(tree.name(records[2]), "[2] {1}");
+        assert!(tree.is_leaf(records[1]));
+
+        assert_eq!(tree.errors().len(), 1);
+        assert!(
+            tree.errors()[0].contains("line 2"),
+            "error should carry the line number: {:?}",
+            tree.errors()[0]
+        );
+
+        // The error node keeps its addresses; its raw text is the alternate.
+        assert_eq!(tree.path(records[1]), OsStr::new("/1"));
+        assert_eq!(tree.relpath(records[1]), OsStr::new(""));
+        assert_eq!(tree.jump_key(records[1]), "/1");
+        assert_eq!(tree.alternate_output(records[1]), OsStr::new("xxx"));
     }
 
     #[test]
@@ -820,10 +1021,30 @@ mod tests {
 
     #[test]
     fn forced_jsonl_reads_a_single_record_as_one_element() {
-        let tree = jsonl_from_reader("{\"a\": 1}\n".as_bytes()).unwrap();
+        let mut tree = jsonl_from_reader("{\"a\": 1}\n".as_bytes()).unwrap();
+        tree.index_all();
         let root = tree.root_ids()[0];
         assert_eq!(names(&tree, tree.root_ids()), ["$ [1]"]);
         assert_eq!(names(&tree, tree.children_of(root)), ["[0] {1}"]);
+    }
+
+    #[test]
+    fn jsonl_startup_builds_only_the_record_level() {
+        let mut input = String::new();
+        for i in 0..10_000 {
+            input.push_str(&format!("{{\"id\": {i}, \"tags\": [1, 2, 3]}}\n"));
+        }
+        let mut tree = from_reader(input.as_bytes()).unwrap();
+
+        // Root + one node per record; nothing below records exists yet.
+        assert_eq!(tree.len(), 1 + 10_000);
+        assert!(!tree.fully_indexed());
+
+        tree.index_all();
+        assert!(tree.fully_indexed());
+        assert!(tree.errors().is_empty());
+        // Each record gains 2 members, each tags array 3 elements.
+        assert_eq!(tree.len(), 1 + 10_000 + 10_000 * 2 + 10_000 * 3);
     }
 
     #[test]
