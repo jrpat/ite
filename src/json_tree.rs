@@ -1,20 +1,30 @@
 //! Transforms JSON input into source-neutral tree data.
+//!
+//! The complete JSON boundary: the input document is read to the end, a
+//! structural scan indexes every value's byte span, and the tree retains the
+//! raw bytes. Labels, previews, pointers, and outputs are derived from the
+//! spans on demand through the crate-private helpers at the bottom, so no
+//! second representation of the document is stored. No JSON values escape
+//! this module.
 
 use std::fmt;
 use std::io::{self, Read, Write};
+use std::ops::Range;
 
 use serde_json::Value;
 
-use crate::tree::{ActionValues, NodeId, Tree};
+use crate::tree::{JsonKey, NodeId, Tree};
 
 /// Enough text to fill an unusually wide terminal without retaining an
 /// unbounded second representation of every object.
 const MAX_OBJECT_PREVIEW_BYTES: usize = 512;
 /// Bounds the search for previewable scalars when early members are containers.
 const MAX_OBJECT_PREVIEW_MEMBERS: usize = 32;
+/// Matches serde_json's default recursion limit, which the scanner replaced.
+const MAX_DEPTH: usize = 128;
 
 #[derive(Debug)]
-pub struct Error(serde_json::Error);
+pub struct Error(String);
 
 impl fmt::Display for Error {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -22,110 +32,336 @@ impl fmt::Display for Error {
     }
 }
 
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&self.0)
+impl std::error::Error for Error {}
+
+pub fn from_reader(mut reader: impl Read) -> Result<Tree, Error> {
+    let mut bytes = Vec::new();
+    reader
+        .read_to_end(&mut bytes)
+        .map_err(|error| Error(error.to_string()))?;
+    from_bytes(bytes)
+}
+
+fn from_bytes(bytes: Vec<u8>) -> Result<Tree, Error> {
+    if u32::try_from(bytes.len()).is_err() {
+        return Err(Error(
+            "input exceeds the 4 GiB the span index addresses".to_owned(),
+        ));
     }
-}
-
-pub fn from_reader(reader: impl Read) -> Result<Tree, Error> {
-    let value = serde_json::from_reader(reader).map_err(Error)?;
-    Ok(transform(&value))
-}
-
-fn transform(value: &Value) -> Tree {
+    if let Err(error) = std::str::from_utf8(&bytes) {
+        return Err(Error(error.to_string()));
+    }
     let mut tree = Tree::new();
-    match value {
-        Value::Object(members) if !members.is_empty() => {
-            for (key, value) in members {
-                push_value(&mut tree, None, key, &append_pointer("", key), value);
-            }
-        }
-        _ => {
-            push_value(&mut tree, None, "$", "", value);
-        }
+    let mut scanner = Scanner::new(&bytes);
+    scan_document(&mut scanner, &mut tree)?;
+    scanner.skip_ws();
+    if scanner.pos != bytes.len() {
+        return Err(scanner.syntax_error("trailing characters"));
     }
-    tree
+    tree.set_json_source(bytes);
+    Ok(tree)
 }
 
-fn push_value(
-    tree: &mut Tree,
-    parent: Option<NodeId>,
-    prefix: &str,
-    pointer: &str,
-    value: &Value,
-) -> NodeId {
-    let (name, detail) = label(prefix, value);
-    let alternate_output =
-        serde_json::to_string(value).expect("serializing a JSON value cannot fail");
-    let action =
-        ActionValues::new(pointer, pointer, pointer).with_alternate_output(alternate_output);
-    let id = tree.push_with_detail(
-        parent,
-        name,
-        detail,
-        matches!(value, Value::Array(_) | Value::Object(_)),
-        action,
-    );
-
-    match value {
-        Value::Array(elements) => {
-            for (index, value) in elements.iter().enumerate() {
-                let index = index.to_string();
-                push_value(
-                    tree,
-                    Some(id),
-                    &format!("[{index}]"),
-                    &append_pointer(pointer, &index),
-                    value,
-                );
-            }
+/// Scan the document, pushing nodes. A non-empty top-level object spreads its
+/// members as forest roots (how the tree has always presented documents);
+/// every other document gets a single `$` root.
+fn scan_document(scanner: &mut Scanner, tree: &mut Tree) -> Result<(), Error> {
+    scanner.skip_ws();
+    if scanner.peek() == Some(b'{') {
+        let probe = scanner.pos;
+        scanner.pos += 1;
+        scanner.skip_ws();
+        let has_members = scanner.peek() != Some(b'}');
+        scanner.pos = probe;
+        if has_members {
+            return scanner.scan_object_members(tree, None);
         }
-        Value::Object(members) => {
-            for (key, value) in members {
-                push_value(tree, Some(id), key, &append_pointer(pointer, key), value);
-            }
-        }
-        _ => {}
     }
-    id
+    scanner.scan_value(tree, None, JsonKey::Root).map(|_| ())
 }
 
-fn label(prefix: &str, value: &Value) -> (String, Option<String>) {
-    match value {
-        Value::Array(elements) if elements.is_empty() => (format!("{prefix} []"), None),
-        Value::Array(elements) => (format!("{prefix} [{}]", elements.len()), None),
-        Value::Object(members) if members.is_empty() => (format!("{prefix} {{}}"), None),
-        Value::Object(members) => (
-            format!("{prefix} {{{}}}", members.len()),
-            object_preview(members),
-        ),
-        _ => (
-            format!(
-                "{prefix}: {}",
-                scalar(value).expect("non-container JSON values are scalar")
-            ),
-            None,
-        ),
+/// A structural scanner: validates the document grammar while recording byte
+/// spans, without building values. Scalar contents are re-parsed lazily at
+/// display time, so validation here is strict about shape (strings, escapes,
+/// number grammar, literals) and leaves range checks to derivation.
+struct Scanner<'a> {
+    bytes: &'a [u8],
+    pos: usize,
+    depth: usize,
+}
+
+impl<'a> Scanner<'a> {
+    fn new(bytes: &'a [u8]) -> Self {
+        Self {
+            bytes,
+            pos: 0,
+            depth: 0,
+        }
+    }
+
+    fn peek(&self) -> Option<u8> {
+        self.bytes.get(self.pos).copied()
+    }
+
+    fn skip_ws(&mut self) {
+        while matches!(self.peek(), Some(b' ' | b'\t' | b'\n' | b'\r')) {
+            self.pos += 1;
+        }
+    }
+
+    fn expect(&mut self, byte: u8) -> Result<(), Error> {
+        if self.peek() == Some(byte) {
+            self.pos += 1;
+            Ok(())
+        } else {
+            Err(self.syntax_error(&format!("expected `{}`", byte as char)))
+        }
+    }
+
+    fn syntax_error(&self, message: &str) -> Error {
+        let consumed = &self.bytes[..self.pos.min(self.bytes.len())];
+        let line = 1 + consumed.iter().filter(|&&b| b == b'\n').count();
+        let line_start = consumed.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
+        let column = self.pos - line_start + 1;
+        Error(format!("{message} at line {line} column {column}"))
+    }
+
+    /// Scan one complete value, pushing its node (and its descendants').
+    fn scan_value(
+        &mut self,
+        tree: &mut Tree,
+        parent: Option<NodeId>,
+        key: JsonKey,
+    ) -> Result<NodeId, Error> {
+        self.skip_ws();
+        let start = self.pos as u32;
+        match self.peek() {
+            Some(b'{') => {
+                let id = tree.push_json(parent, start..start, key, true);
+                self.descend()?;
+                self.scan_object_members(tree, Some(id))?;
+                self.depth -= 1;
+                tree.set_json_span_end(id, self.pos as u32);
+                Ok(id)
+            }
+            Some(b'[') => {
+                let id = tree.push_json(parent, start..start, key, true);
+                self.descend()?;
+                self.scan_array_elements(tree, id)?;
+                self.depth -= 1;
+                tree.set_json_span_end(id, self.pos as u32);
+                Ok(id)
+            }
+            _ => {
+                self.scan_scalar()?;
+                Ok(tree.push_json(parent, start..self.pos as u32, key, false))
+            }
+        }
+    }
+
+    fn descend(&mut self) -> Result<(), Error> {
+        self.depth += 1;
+        if self.depth > MAX_DEPTH {
+            return Err(self.syntax_error("recursion limit exceeded"));
+        }
+        Ok(())
+    }
+
+    /// Scan `{ "key": value, ... }`, pushing each member under `parent`
+    /// (`None` spreads the members as forest roots).
+    fn scan_object_members(&mut self, tree: &mut Tree, parent: Option<NodeId>) -> Result<(), Error> {
+        self.expect(b'{')?;
+        self.skip_ws();
+        if self.peek() == Some(b'}') {
+            self.pos += 1;
+            return Ok(());
+        }
+        loop {
+            self.skip_ws();
+            let key_start = self.pos as u32;
+            self.scan_string()?;
+            let key_span = key_start..self.pos as u32;
+            self.skip_ws();
+            self.expect(b':')?;
+            self.scan_value(tree, parent, JsonKey::Member { key_span })?;
+            self.skip_ws();
+            match self.peek() {
+                Some(b',') => self.pos += 1,
+                Some(b'}') => {
+                    self.pos += 1;
+                    return Ok(());
+                }
+                _ => return Err(self.syntax_error("expected `,` or `}`")),
+            }
+        }
+    }
+
+    fn scan_array_elements(&mut self, tree: &mut Tree, parent: NodeId) -> Result<(), Error> {
+        self.expect(b'[')?;
+        self.skip_ws();
+        if self.peek() == Some(b']') {
+            self.pos += 1;
+            return Ok(());
+        }
+        let mut index = 0;
+        loop {
+            self.scan_value(tree, Some(parent), JsonKey::Index(index))?;
+            index += 1;
+            self.skip_ws();
+            match self.peek() {
+                Some(b',') => self.pos += 1,
+                Some(b']') => {
+                    self.pos += 1;
+                    return Ok(());
+                }
+                _ => return Err(self.syntax_error("expected `,` or `]`")),
+            }
+        }
+    }
+
+    fn scan_scalar(&mut self) -> Result<(), Error> {
+        match self.peek() {
+            Some(b'"') => self.scan_string(),
+            Some(b't') => self.scan_literal("true"),
+            Some(b'f') => self.scan_literal("false"),
+            Some(b'n') => self.scan_literal("null"),
+            Some(b'-' | b'0'..=b'9') => self.scan_number(),
+            Some(other) => Err(self.syntax_error(&format!("unexpected character `{}`", other as char))),
+            None => Err(self.syntax_error("unexpected end of input")),
+        }
+    }
+
+    fn scan_literal(&mut self, literal: &str) -> Result<(), Error> {
+        if self.bytes[self.pos..].starts_with(literal.as_bytes()) {
+            self.pos += literal.len();
+            Ok(())
+        } else {
+            Err(self.syntax_error(&format!("expected `{literal}`")))
+        }
+    }
+
+    fn scan_string(&mut self) -> Result<(), Error> {
+        self.expect(b'"')?;
+        loop {
+            match self.peek() {
+                None => return Err(self.syntax_error("unterminated string")),
+                Some(b'"') => {
+                    self.pos += 1;
+                    return Ok(());
+                }
+                Some(b'\\') => {
+                    self.pos += 1;
+                    match self.peek() {
+                        Some(b'"' | b'\\' | b'/' | b'b' | b'f' | b'n' | b'r' | b't') => {
+                            self.pos += 1;
+                        }
+                        Some(b'u') => {
+                            self.pos += 1;
+                            for _ in 0..4 {
+                                if !self.peek().is_some_and(|b| b.is_ascii_hexdigit()) {
+                                    return Err(self.syntax_error("invalid \\u escape"));
+                                }
+                                self.pos += 1;
+                            }
+                        }
+                        _ => return Err(self.syntax_error("invalid escape")),
+                    }
+                }
+                Some(byte) if byte < 0x20 => {
+                    return Err(self.syntax_error("control character in string"));
+                }
+                Some(_) => self.pos += 1,
+            }
+        }
+    }
+
+    fn scan_number(&mut self) -> Result<(), Error> {
+        if self.peek() == Some(b'-') {
+            self.pos += 1;
+        }
+        match self.peek() {
+            Some(b'0') => self.pos += 1,
+            Some(b'1'..=b'9') => {
+                while self.peek().is_some_and(|b| b.is_ascii_digit()) {
+                    self.pos += 1;
+                }
+            }
+            _ => return Err(self.syntax_error("invalid number")),
+        }
+        if self.peek() == Some(b'.') {
+            self.pos += 1;
+            if !self.peek().is_some_and(|b| b.is_ascii_digit()) {
+                return Err(self.syntax_error("invalid number"));
+            }
+            while self.peek().is_some_and(|b| b.is_ascii_digit()) {
+                self.pos += 1;
+            }
+        }
+        if matches!(self.peek(), Some(b'e' | b'E')) {
+            self.pos += 1;
+            if matches!(self.peek(), Some(b'+' | b'-')) {
+                self.pos += 1;
+            }
+            if !self.peek().is_some_and(|b| b.is_ascii_digit()) {
+                return Err(self.syntax_error("invalid number"));
+            }
+            while self.peek().is_some_and(|b| b.is_ascii_digit()) {
+                self.pos += 1;
+            }
+        }
+        Ok(())
     }
 }
 
-fn object_preview(members: &serde_json::Map<String, Value>) -> Option<String> {
+// --- Span-derivation helpers used by `Tree`'s accessors ---
+
+fn slice<'a>(bytes: &'a [u8], span: &Range<u32>) -> &'a [u8] {
+    &bytes[span.start as usize..span.end as usize]
+}
+
+/// The unescaped text of a raw key token (quotes included in the span).
+pub(crate) fn key_text(bytes: &[u8], span: &Range<u32>) -> String {
+    let raw = slice(bytes, span);
+    serde_json::from_slice(raw).unwrap_or_else(|_| String::from_utf8_lossy(raw).into_owned())
+}
+
+/// The compact serialization of the value at `span` — scalars for labels,
+/// whole subtrees for the alternate output. Falls back to the raw text when
+/// the span holds something serde rejects (e.g. an out-of-range number).
+pub(crate) fn value_text(bytes: &[u8], span: &Range<u32>) -> String {
+    let raw = slice(bytes, span);
+    match serde_json::from_slice::<Value>(raw) {
+        Ok(value) => {
+            serde_json::to_string(&value).expect("serializing a parsed JSON value cannot fail")
+        }
+        Err(_) => String::from_utf8_lossy(raw).into_owned(),
+    }
+}
+
+pub(crate) fn append_pointer(parent: &str, token: &str) -> String {
+    let token = token.replace('~', "~0").replace('/', "~1");
+    format!("{parent}/{token}")
+}
+
+/// Preview of an object's leading scalar members: `Some((key span, value
+/// span))` per scalar member, `None` per container member — containers occupy
+/// one of the inspected slots but contribute no text.
+pub(crate) fn object_preview(
+    bytes: &[u8],
+    members: impl Iterator<Item = Option<(Range<u32>, Range<u32>)>>,
+) -> Option<String> {
     let mut preview = Preview::new(MAX_OBJECT_PREVIEW_BYTES);
-    for (key, value) in members.iter().take(MAX_OBJECT_PREVIEW_MEMBERS) {
-        if !matches!(
-            value,
-            Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_)
-        ) {
+    for member in members.take(MAX_OBJECT_PREVIEW_MEMBERS) {
+        let Some((key_span, value_span)) = member else {
             continue;
-        }
+        };
         if !preview.is_empty() && !preview.push_str(" · ") {
             break;
         }
-        if !preview.push_str(key) || !preview.push_str(": ") {
+        if !preview.push_str(&key_text(bytes, &key_span)) || !preview.push_str(": ") {
             break;
         }
-        preview.push_json(value);
+        preview.push_value(bytes, &value_span);
         if preview.is_exhausted() {
             break;
         }
@@ -175,9 +411,16 @@ impl Preview {
         false
     }
 
-    fn push_json(&mut self, value: &Value) {
-        if serde_json::to_writer(&mut *self, value).is_err() {
-            self.exhausted = true;
+    fn push_value(&mut self, bytes: &[u8], span: &Range<u32>) {
+        match serde_json::from_slice::<Value>(slice(bytes, span)) {
+            Ok(value) => {
+                if serde_json::to_writer(&mut *self, &value).is_err() {
+                    self.exhausted = true;
+                }
+            }
+            Err(_) => {
+                self.push_str(&String::from_utf8_lossy(slice(bytes, span)));
+            }
         }
     }
 
@@ -214,20 +457,6 @@ impl Write for Preview {
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
     }
-}
-
-fn scalar(value: &Value) -> Option<String> {
-    match value {
-        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {
-            Some(serde_json::to_string(value).expect("serializing a JSON scalar cannot fail"))
-        }
-        Value::Array(_) | Value::Object(_) => None,
-    }
-}
-
-fn append_pointer(parent: &str, token: &str) -> String {
-    let token = token.replace('~', "~0").replace('/', "~1");
-    format!("{parent}/{token}")
 }
 
 #[cfg(test)]
@@ -313,7 +542,7 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
-        let tree = transform(&document);
+        let tree = parse(&document.to_string());
         let item = tree.root_ids()[0];
 
         assert_eq!(tree.detail(item), None);
@@ -362,6 +591,36 @@ mod tests {
     fn invalid_json_is_reported() {
         let error = from_reader("{]".as_bytes()).unwrap_err();
         assert!(error.to_string().starts_with("invalid JSON input:"));
+    }
+
+    #[test]
+    fn trailing_content_after_the_document_is_an_error() {
+        assert!(from_reader(r#"{"a": 1} extra"#.as_bytes()).is_err());
+        assert!(from_reader("[1, 2] [3]".as_bytes()).is_err());
+        assert!(from_reader("null null".as_bytes()).is_err());
+    }
+
+    #[test]
+    fn truncated_documents_are_an_error() {
+        assert!(from_reader(r#"{"a": "#.as_bytes()).is_err());
+        assert!(from_reader(r#"["unterminated"#.as_bytes()).is_err());
+        assert!(from_reader("".as_bytes()).is_err());
+    }
+
+    #[test]
+    fn escaped_keys_and_strings_render_unescaped_labels() {
+        let tree = parse("{\"k\\u0065y\": \"va\\u0041lue\"}");
+        assert_eq!(names(&tree, tree.root_ids()), [r#"key: "vaAlue""#]);
+    }
+
+    #[test]
+    fn numbers_render_through_json_value_normalization() {
+        let tree = parse(r#"[1e3, 0.5, -0]"#);
+        let root = tree.root_ids()[0];
+        assert_eq!(
+            names(&tree, tree.children_of(root)),
+            ["[0]: 1000.0", "[1]: 0.5", "[2]: -0.0"]
+        );
     }
 
     #[test]

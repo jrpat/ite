@@ -7,6 +7,7 @@
 //! the source on demand instead of holding them.
 
 use std::ffi::OsString;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use tui_treelistview::{TreeChildren, TreeModel, TreeRevision};
@@ -55,16 +56,30 @@ struct Explicit {
     action: ActionValues,
 }
 
+/// How a JSON node is addressed within its parent.
+#[derive(Debug)]
+pub(crate) enum JsonKey {
+    /// The synthetic `$` root of a single-rooted document.
+    Root,
+    /// An object member; the span covers the raw key token, quotes included.
+    Member { key_span: Range<u32> },
+    /// An array element.
+    Index(u32),
+}
+
 /// Per-node data that differs by source.
 #[derive(Debug)]
 enum Payload {
-    /// Stored verbatim (JSON documents, tests). Boxed so the variant does not
-    /// inflate every filesystem node.
+    /// Stored verbatim (tests, transitional). Boxed so the variant does not
+    /// inflate every filesystem or JSON node.
     Explicit(Box<Explicit>),
     /// A filesystem entry's final path component. Kept as raw `OsString` so
     /// non-UTF-8 names survive into the derived paths handed to shell
     /// bindings; only the displayed name goes through `to_string_lossy`.
     Fs { file_name: OsString },
+    /// A JSON value: its byte span in the retained input plus how it is
+    /// addressed within its parent. Everything else is derived.
+    Json { span: Range<u32>, key: JsonKey },
 }
 
 #[derive(Debug)]
@@ -84,6 +99,8 @@ pub struct Tree {
     revision: TreeRevision,
     /// The scanned directory (canonicalized) filesystem paths derive from.
     fs_root: Option<PathBuf>,
+    /// The raw JSON input document that `Payload::Json` spans index into.
+    json_source: Option<Vec<u8>>,
 }
 
 impl Tree {
@@ -145,6 +162,34 @@ impl Tree {
         )
     }
 
+    /// Append a JSON value node; its display and action values are derived on
+    /// demand from the retained input bytes.
+    pub(crate) fn push_json(
+        &mut self,
+        parent: Option<NodeId>,
+        span: Range<u32>,
+        key: JsonKey,
+        is_container: bool,
+    ) -> NodeId {
+        self.push_node(parent, is_container, Payload::Json { span, key })
+    }
+
+    /// Close a JSON container's span once its end offset is known.
+    pub(crate) fn set_json_span_end(&mut self, id: NodeId, end: u32) {
+        if let Payload::Json { span, .. } = &mut self.nodes[id].payload {
+            span.end = end;
+        }
+    }
+
+    /// Attach the input document the JSON spans index into.
+    pub(crate) fn set_json_source(&mut self, bytes: Vec<u8>) {
+        self.json_source = Some(bytes);
+    }
+
+    fn json_bytes(&self) -> &[u8] {
+        self.json_source.as_deref().unwrap_or(&[])
+    }
+
     fn push_node(&mut self, parent: Option<NodeId>, is_container: bool, payload: Payload) -> NodeId {
         let id = self.nodes.len();
         let depth = parent.map_or(0, |id| self.nodes[id].depth + 1);
@@ -168,17 +213,55 @@ impl Tree {
 
     /// The node's display name.
     pub fn name(&self, id: NodeId) -> String {
-        match &self.node(id).payload {
+        let node = self.node(id);
+        match &node.payload {
             Payload::Explicit(explicit) => explicit.name.clone(),
             Payload::Fs { file_name } => file_name.to_string_lossy().into_owned(),
+            Payload::Json { span, key } => {
+                let bytes = self.json_bytes();
+                let prefix = match key {
+                    JsonKey::Root => "$".to_owned(),
+                    JsonKey::Member { key_span } => crate::json_tree::key_text(bytes, key_span),
+                    JsonKey::Index(index) => format!("[{index}]"),
+                };
+                if node.is_container {
+                    let count = node.children.len();
+                    match (bytes[span.start as usize], count) {
+                        (b'{', 0) => format!("{prefix} {{}}"),
+                        (b'{', count) => format!("{prefix} {{{count}}}"),
+                        (_, 0) => format!("{prefix} []"),
+                        (_, count) => format!("{prefix} [{count}]"),
+                    }
+                } else {
+                    format!("{prefix}: {}", crate::json_tree::value_text(bytes, span))
+                }
+            }
         }
     }
 
     /// Optional secondary text rendered after the name.
     pub fn detail(&self, id: NodeId) -> Option<String> {
-        match &self.node(id).payload {
+        let node = self.node(id);
+        match &node.payload {
             Payload::Explicit(explicit) => explicit.detail.clone(),
             Payload::Fs { .. } => None,
+            Payload::Json { span, .. } => {
+                let bytes = self.json_bytes();
+                if !node.is_container || bytes.get(span.start as usize) != Some(&b'{') {
+                    return None;
+                }
+                let members = node.children.iter().map(|&child| {
+                    let child = self.node(child);
+                    match &child.payload {
+                        Payload::Json {
+                            span,
+                            key: JsonKey::Member { key_span },
+                        } if !child.is_container => Some((key_span.clone(), span.clone())),
+                        _ => None,
+                    }
+                });
+                crate::json_tree::object_preview(bytes, members)
+            }
         }
     }
 
@@ -206,6 +289,7 @@ impl Tree {
         match &self.node(id).payload {
             Payload::Explicit(explicit) => explicit.action.output.clone(),
             Payload::Fs { .. } => self.fs_path(id),
+            Payload::Json { .. } => self.json_pointer(id).into(),
         }
     }
 
@@ -214,6 +298,9 @@ impl Tree {
         match &self.node(id).payload {
             Payload::Explicit(explicit) => explicit.action.alternate_output.clone(),
             Payload::Fs { file_name } => file_name.clone(),
+            Payload::Json { span, .. } => {
+                crate::json_tree::value_text(self.json_bytes(), span).into()
+            }
         }
     }
 
@@ -222,6 +309,7 @@ impl Tree {
         match &self.node(id).payload {
             Payload::Explicit(explicit) => explicit.action.path.clone(),
             Payload::Fs { .. } => self.fs_path(id),
+            Payload::Json { .. } => self.json_pointer(id).into(),
         }
     }
 
@@ -230,6 +318,7 @@ impl Tree {
         match &self.node(id).payload {
             Payload::Explicit(explicit) => explicit.action.relpath.clone(),
             Payload::Fs { .. } => self.fs_relpath(id).into_os_string(),
+            Payload::Json { .. } => self.json_pointer(id).into(),
         }
     }
 
@@ -259,6 +348,32 @@ impl Tree {
     fn fs_path(&self, id: NodeId) -> OsString {
         let root = self.fs_root.as_deref().unwrap_or(Path::new(""));
         root.join(self.fs_relpath(id)).into_os_string()
+    }
+
+    /// Canonical JSON Pointer of a JSON node, assembled from its ancestor
+    /// keys. The synthetic `$` root contributes no token, so a single-rooted
+    /// document's root is the empty (whole-document) pointer.
+    fn json_pointer(&self, id: NodeId) -> String {
+        let mut tokens = Vec::new();
+        let mut cursor = Some(id);
+        while let Some(current) = cursor {
+            let node = self.node(current);
+            if let Payload::Json { key, .. } = &node.payload {
+                match key {
+                    JsonKey::Root => {}
+                    JsonKey::Member { key_span } => {
+                        tokens.push(crate::json_tree::key_text(self.json_bytes(), key_span));
+                    }
+                    JsonKey::Index(index) => tokens.push(index.to_string()),
+                }
+            }
+            cursor = node.parent;
+        }
+        let mut pointer = String::new();
+        for token in tokens.iter().rev() {
+            pointer = crate::json_tree::append_pointer(&pointer, token);
+        }
+        pointer
     }
 
     pub fn len(&self) -> usize {
