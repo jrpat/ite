@@ -876,7 +876,12 @@ mod tests {
         assert!(text.contains("Shortcuts"), "{text}");
         assert!(text.contains("Close"), "{text}");
         assert!(text.contains("First"), "{text}");
-        assert!(!text.contains("gg"), "{text}");
+        assert!(
+            app.panel_entries
+                .iter()
+                .all(|entry| entry.label.full != "gg"),
+            "{text}"
+        );
 
         let blue_bold_key = (panel.y..panel.bottom()).any(|y| {
             (panel.x..panel.right()).any(|x| {

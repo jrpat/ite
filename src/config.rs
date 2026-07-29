@@ -107,6 +107,8 @@ impl AppCommand {
             Self::Expand => "Expand",
             Self::Collapse => "Collapse",
             Self::ExpandRecursively => "Expand all",
+            Self::Toggle => "Toggle",
+            Self::ToggleRecursively => "Toggle all",
             Self::CollapseRecursively => "Collapse all",
             Self::Select => "Select",
             Self::Accept => "Accept",
@@ -402,6 +404,12 @@ help = "  Custom\tCOPY\u0007\nignored"
         ] {
             assert_eq!(AppCommand::parse(name).unwrap(), cmd, "{name}");
         }
+    }
+
+    #[test]
+    fn toggle_commands_have_keybinding_panel_descriptions() {
+        assert_eq!(AppCommand::Toggle.description(), "Toggle");
+        assert_eq!(AppCommand::ToggleRecursively.description(), "Toggle all");
     }
 
     #[test]

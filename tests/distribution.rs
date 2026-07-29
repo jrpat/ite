@@ -320,6 +320,7 @@ fn homebrew_workflow_is_stable_idempotent_and_tests_the_binary() {
 #[test]
 fn release_skill_is_discoverable_and_covers_the_release_contract() {
     let skill = read(".agents/skills/ite-release/SKILL.md");
+    let normalized_skill = skill.split_whitespace().collect::<Vec<_>>().join(" ");
 
     for required in [
         "name: ite-release",
@@ -335,7 +336,7 @@ fn release_skill_is_discoverable_and_covers_the_release_contract() {
         "## Recover safely",
         "short-lived OIDC credential",
     ] {
-        assert_contains(&skill, required);
+        assert_contains(&normalized_skill, required);
     }
     assert!(
         !skill.contains("TODO"),
