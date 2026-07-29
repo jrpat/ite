@@ -61,11 +61,17 @@ stdout and exits. The TUI renders on **stderr** so stdout can be piped.
   the source's natural unit (scan root / document / JSONL record);
   `jump_key` is always the document-global address. The app and UI consume
   the accessors and know nothing about input formats.
-- `src/fstree.rs` — eager filesystem transform via `ignore::WalkBuilder`.
-  Top-level entries are forest roots; siblings are directories-first and
-  case-insensitively sorted. Empty directories are leaves; alternate output is
-  the basename. Nodes store only the raw file name; paths are derived by
-  ancestor-join from the canonicalized scan root.
+- `src/fstree.rs` — lazy filesystem source: `scan` walks only the top level
+  (targeted depth-1 `ignore::WalkBuilder`), and each directory's contents
+  come from the same targeted walk when expanded or when the sweep reaches
+  it — `WalkBuilder`'s standard filters read ancestor ignore files, so lazy
+  subdirectory walks honor the same rules the eager scan did. Top-level
+  entries are forest roots; siblings are directories-first and
+  case-insensitively sorted per list. An unwalked directory renders the ◇
+  glyph; an empty one becomes a leaf once walked. Unreadable directories are
+  recorded in the tree's error list (banner + stderr on exit). Alternate
+  output is the basename; nodes store only the raw file name, paths derive
+  by ancestor-join from the canonicalized scan root.
 - `src/json_tree.rs` — the complete JSON boundary: reads the input to the
   end, detects JSON vs JSONL from the content, and discovers structure
   *shallowly* into the retained bytes (no serde DOM is kept; serde parses

@@ -114,6 +114,8 @@ pub struct Tree {
     revision: TreeRevision,
     /// The scanned directory (canonicalized) filesystem paths derive from.
     fs_root: Option<PathBuf>,
+    /// Whether the scan ignores ignore-files; lazy walks must match.
+    fs_no_ignore: bool,
     /// The raw JSON input document that `Payload::Json` spans index into.
     /// Shared so materialization can read it while appending nodes.
     json_source: Option<Arc<Vec<u8>>>,
@@ -131,12 +133,18 @@ impl Tree {
     }
 
     /// A tree over a directory scan rooted at `root` (canonicalized);
-    /// filesystem nodes derive their paths from it.
-    pub(crate) fn new_fs(root: PathBuf) -> Self {
+    /// filesystem nodes derive their paths from it and lazy directory walks
+    /// reuse the scan's ignore setting.
+    pub(crate) fn new_fs(root: PathBuf, no_ignore: bool) -> Self {
         Self {
             fs_root: Some(root),
+            fs_no_ignore: no_ignore,
             ..Self::default()
         }
+    }
+
+    pub(crate) fn fs_no_ignore(&self) -> bool {
+        self.fs_no_ignore
     }
 
     pub fn push(
@@ -170,6 +178,7 @@ impl Tree {
     }
 
     /// Append a filesystem entry; its action values are derived on demand.
+    /// Directories start unloaded — their contents come from a lazy walk.
     pub(crate) fn push_fs(
         &mut self,
         parent: Option<NodeId>,
@@ -179,7 +188,7 @@ impl Tree {
         self.push_node(
             parent,
             is_container,
-            true,
+            !is_container,
             Payload::Fs {
                 file_name: file_name.into(),
             },
@@ -284,6 +293,7 @@ impl Tree {
         }
         match self.nodes[id].payload {
             Payload::Json { .. } => crate::json_tree::materialize(self, id),
+            Payload::Fs { .. } => crate::fstree::materialize(self, id),
             _ => self.mark_children_loaded(id),
         }
         self.revision.advance();
@@ -348,6 +358,13 @@ impl Tree {
     /// Messages for spans that failed to scan, in discovery order.
     pub fn errors(&self) -> &[String] {
         &self.errors
+    }
+
+    /// Record a non-fatal source error (an unreadable directory) for the
+    /// banner and the exit report.
+    pub(crate) fn record_error(&mut self, message: String) {
+        self.errors.push(message);
+        self.revision.advance();
     }
 
     fn node(&self, id: NodeId) -> &Node {
@@ -685,6 +702,14 @@ impl Tree {
             self.nodes[id].children = children;
         }
     }
+
+    /// Reorder one node's children to put containers first (lazy directory
+    /// walks sort each sibling list as it materializes).
+    pub(crate) fn containers_first_children(&mut self, id: NodeId) {
+        let mut children = std::mem::take(&mut self.nodes[id].children);
+        children.sort_by_key(|&child| !self.nodes[child].is_container);
+        self.nodes[id].children = children;
+    }
 }
 
 impl TreeModel for Tree {
@@ -780,7 +805,7 @@ mod tests {
 
     #[test]
     fn fs_nodes_derive_action_values_from_the_hierarchy() {
-        let mut tree = Tree::new_fs("/scan/root".into());
+        let mut tree = Tree::new_fs("/scan/root".into(), false);
         let dir = tree.push_fs(None, "b-dir", true);
         let file = tree.push_fs(Some(dir), "inner.txt", false);
 

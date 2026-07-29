@@ -1137,6 +1137,7 @@ mod tests {
     fn slash_opens_the_jump_picker() {
         let (_d, mut app) = app();
         assert!(!in_jump(&app));
+        while app.do_work() {} // the picker waits for a complete index
         app.handle_key(Key::parse("/").unwrap());
         assert!(in_jump(&app));
     }
@@ -1158,6 +1159,7 @@ mod tests {
         let (_d, mut app) = app();
         // Everything starts collapsed: only the top level is visible.
         assert_eq!(app.visible_names(), ["a", "b", "c.txt"]);
+        while app.do_work() {} // the picker waits for a complete index
         app.handle_key(Key::parse("/").unwrap());
         for k in ["a", "a", "a"] {
             app.handle_key(Key::parse(k).unwrap()); // query "aaa" -> a/aa/aaa.txt
@@ -1174,6 +1176,7 @@ mod tests {
         let (_d, tree) = fixture();
         let config = Config::parse("[ctrl+p]\ncmd = \"jump\"\n").unwrap();
         let mut app = App::new(tree, &config, None);
+        while app.do_work() {} // the picker waits for a complete index
         app.handle_key(Key::parse("ctrl+p").unwrap());
         assert!(in_jump(&app));
     }
