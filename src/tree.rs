@@ -659,23 +659,11 @@ impl Tree {
         false
     }
 
-    /// True when the node cannot be expanded. An unloaded container is not a
-    /// leaf (it may still expand) unless its discovered child count is zero.
+    /// True when the node cannot be expanded. Containers are never leaves:
+    /// an empty directory is still a directory and `{}`/`[]` are still
+    /// containers — they simply open to nothing.
     pub fn is_leaf(&self, id: NodeId) -> bool {
-        let node = self.node(id);
-        if !node.is_container {
-            return true;
-        }
-        if node.children_loaded {
-            return node.children.is_empty();
-        }
-        matches!(
-            node.payload,
-            Payload::Json {
-                child_count: Some(0),
-                ..
-            }
-        )
+        !self.node(id).is_container
     }
 
     /// All expandable nodes as `(id, parent)` pairs, in tree order.
@@ -725,7 +713,10 @@ impl TreeModel for Tree {
 
     fn children(&self, id: NodeId) -> TreeChildren<'_, NodeId> {
         let node = &self.nodes[id];
-        if node.is_container && !node.children_loaded && !self.is_leaf(id) {
+        if node.is_container && node.children.is_empty() {
+            // `Unloaded` rather than an empty slice (which the widget
+            // normalizes to `Leaf`): a childless container — unwalked,
+            // unvalidated, or genuinely empty — must stay a branch.
             TreeChildren::Unloaded
         } else {
             TreeChildren::loaded(&node.children)

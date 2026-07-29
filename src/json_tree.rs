@@ -744,7 +744,8 @@ mod tests {
         );
         assert!(tree.is_container(tree.root_ids()[0]));
         assert!(tree.is_container(tree.root_ids()[1]));
-        assert!(tree.is_leaf(tree.root_ids()[1]));
+        // Empty containers stay branches — they open to nothing.
+        assert!(!tree.is_leaf(tree.root_ids()[1]));
     }
 
     #[test]
@@ -870,7 +871,7 @@ mod tests {
         assert_eq!(names(&empty, empty.root_ids()), ["$ {}"]);
         assert_eq!(empty.output(empty.root_ids()[0]), OsStr::new(""));
         assert!(empty.is_container(empty.root_ids()[0]));
-        assert!(empty.is_leaf(empty.root_ids()[0]));
+        assert!(!empty.is_leaf(empty.root_ids()[0]));
     }
 
     #[test]

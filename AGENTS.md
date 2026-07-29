@@ -75,8 +75,12 @@ stdout and exits. The TUI renders on **stderr** so stdout can be piped.
   it — `WalkBuilder`'s standard filters read ancestor ignore files, so lazy
   subdirectory walks honor the same rules the eager scan did. Top-level
   entries are forest roots; siblings are directories-first and
-  case-insensitively sorted per list. An unwalked directory renders the ◇
-  glyph; an empty one becomes a leaf once walked. Unreadable directories are
+  case-insensitively sorted per list. Directories always render as collapsed
+  branches (▶) whether walked or not — containers are never leaves, so an
+  empty directory stays a directory and simply opens to nothing (the model
+  reports childless containers as `TreeChildren::Unloaded` because the
+  widget normalizes an empty child slice to `Leaf`; ite maps the unloaded
+  glyph to ▶ so the state is invisible). Unreadable directories are
   recorded in the tree's error list (banner + stderr on exit). Alternate
   output is the basename; nodes store only the raw file name, paths derive
   by ancestor-join from the canonicalized scan root.

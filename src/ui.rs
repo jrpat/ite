@@ -93,7 +93,10 @@ const GLYPHS: TreeGlyphs<'static> = TreeGlyphs {
     leaf: "•",
     expanded: "▼",
     collapsed: "▶",
-    unloaded: "◇",
+    // Deliberately the collapsed glyph: unloaded-vs-loaded is bookkeeping,
+    // not something the user should see. It also covers walked-empty
+    // containers, which report `Unloaded` to stay branches.
+    unloaded: "▶",
     loading: "◌",
 };
 
@@ -624,6 +627,36 @@ mod tests {
             got,
             ["▼ subdir", "├ • inner.txt", "└ • last.txt", "• file.txt"]
         );
+    }
+
+    #[test]
+    fn unwalked_directories_render_the_collapsed_glyph() {
+        let (_d, mut app) = {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::create_dir(dir.path().join("subdir")).unwrap();
+            std::fs::write(dir.path().join("subdir/inner.txt"), "").unwrap();
+            std::fs::write(dir.path().join("file.txt"), "").unwrap();
+            let tree = fstree::scan(dir.path(), false).unwrap();
+            (dir, App::new(tree, &Config::default(), None))
+        };
+        assert!(app.has_work(), "subdir must still be unwalked");
+        let (_buf, text) = drawn(&mut app, 40, 10);
+        assert!(text.contains("▶ subdir"), "in:\n{text}");
+        assert!(!text.contains('◇'), "no unloaded glyph in:\n{text}");
+    }
+
+    #[test]
+    fn empty_directories_render_as_collapsed_branches() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("hollow")).unwrap();
+        std::fs::write(dir.path().join("file.txt"), "").unwrap();
+        let tree = fstree::scan(dir.path(), false).unwrap();
+        let mut app = App::new(tree, &Config::default(), Some(ExpandSpec::All));
+        while app.do_work() {}
+
+        let (_buf, text) = drawn(&mut app, 40, 10);
+        assert!(text.contains("▶ hollow"), "in:\n{text}");
+        assert!(!text.contains("• hollow"), "not a leaf in:\n{text}");
     }
 
     #[test]

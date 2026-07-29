@@ -221,8 +221,9 @@ mod tests {
                 .unwrap()
         };
         assert!(!tree.is_leaf(by_name("b-dir")));
-        // An empty directory cannot be expanded, so it is a leaf once walked.
-        assert!(tree.is_leaf(by_name("empty-dir")));
+        // An empty directory is still a directory: a branch that opens to
+        // nothing, never a leaf.
+        assert!(!tree.is_leaf(by_name("empty-dir")));
         assert!(tree.is_leaf(by_name("a-file.txt")));
     }
 
@@ -235,8 +236,10 @@ mod tests {
             TreeChildren::Loaded(kids) => assert_eq!(kids, tree.children_of(b_dir)),
             other => panic!("expected Loaded, got {other:?}"),
         }
+        // A walked-empty directory stays a branch; `Unloaded` (not an empty
+        // slice) is how the model keeps that fact visible to the widget.
         let empty = tree.root_ids()[1];
-        assert_eq!(tree.children(empty), TreeChildren::Leaf);
+        assert_eq!(tree.children(empty), TreeChildren::Unloaded);
     }
 
     #[test]
@@ -252,6 +255,6 @@ mod tests {
         let dir = fixture();
         let tree = scan_all(dir.path());
         let names: Vec<String> = tree.branches().map(|(id, _)| tree.name(id)).collect();
-        assert_eq!(names, ["b-dir"]);
+        assert_eq!(names, ["b-dir", "empty-dir"]);
     }
 }
