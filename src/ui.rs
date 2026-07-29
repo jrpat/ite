@@ -30,8 +30,10 @@ impl TreeLabelRenderer<Tree> for Label {
         context: &TreeRowContext<'_>,
         glyphs: &TreeGlyphs<'a>,
     ) -> Cell<'a> {
-        let node = model.node(id);
-        let mut label = TreeLabelPrefix::borrowed(&node.name);
+        let mut label = TreeLabelPrefix {
+            name: model.name(id).into(),
+            prefix: None,
+        };
         if context.level == 0 && context.node.expansion == TreeExpansionState::Leaf {
             label.prefix = Some(glyphs.leaf.into());
         }
@@ -51,7 +53,7 @@ impl TreeLabelRenderer<Tree> for Label {
         {
             line.spans[state_index].style = context.line_style;
         }
-        if let Some(detail) = &node.detail {
+        if let Some(detail) = model.detail(id) {
             line.push_span(Span::styled(
                 format!(" {detail}"),
                 Style::default().fg(Color::DarkGray),

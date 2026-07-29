@@ -241,8 +241,8 @@ mod tests {
         from_reader(json.as_bytes()).unwrap()
     }
 
-    fn names<'a>(tree: &'a Tree, ids: &[usize]) -> Vec<&'a str> {
-        ids.iter().map(|&id| tree.node(id).name.as_str()).collect()
+    fn names(tree: &Tree, ids: &[usize]) -> Vec<String> {
+        ids.iter().map(|&id| tree.name(id)).collect()
     }
 
     #[test]
@@ -260,8 +260,8 @@ mod tests {
             names(&tree, tree.root_ids()),
             ["users [3]", "empty []", "settings {}", "enabled: true"]
         );
-        assert!(tree.node(tree.root_ids()[0]).is_container);
-        assert!(tree.node(tree.root_ids()[1]).is_container);
+        assert!(tree.is_container(tree.root_ids()[0]));
+        assert!(tree.is_container(tree.root_ids()[1]));
         assert!(tree.is_leaf(tree.root_ids()[1]));
     }
 
@@ -269,15 +269,15 @@ mod tests {
     fn array_elements_keep_their_order_and_include_object_previews() {
         let tree = parse(r#"["rust", 7, {"id": 12, "name": "Ada"}, [null]]"#);
         let root = tree.root_ids()[0];
-        let object = tree.node(root).children[2];
+        let object = tree.children_of(root)[2];
 
-        assert_eq!(tree.node(root).name, "$ [4]");
+        assert_eq!(tree.name(root), "$ [4]");
         assert_eq!(
-            names(&tree, &tree.node(root).children),
+            names(&tree, tree.children_of(root)),
             ["[0]: \"rust\"", "[1]: 7", "[2] {2}", "[3] [1]"]
         );
         assert_eq!(
-            tree.node(object).detail.as_deref(),
+            tree.detail(object).as_deref(),
             Some(r#"id: 12 · name: "Ada""#)
         );
     }
@@ -287,10 +287,7 @@ mod tests {
         let tree = parse(r#"{"item":{"a":1,"b":2,"c":3}}"#);
         let item = tree.root_ids()[0];
 
-        assert_eq!(
-            tree.node(item).detail.as_deref(),
-            Some("a: 1 · b: 2 · c: 3")
-        );
+        assert_eq!(tree.detail(item).as_deref(), Some("a: 1 · b: 2 · c: 3"));
     }
 
     #[test]
@@ -298,7 +295,7 @@ mod tests {
         let json = format!(r#"{{"item":{{"huge":"{}"}}}}"#, "😀".repeat(1_000));
         let tree = parse(&json);
         let item = tree.root_ids()[0];
-        let preview = tree.node(item).detail.as_deref().unwrap();
+        let preview = tree.detail(item).unwrap();
 
         assert!(preview.len() <= 512, "preview used {} bytes", preview.len());
         assert!(preview.starts_with(r#"huge: ""#));
@@ -319,66 +316,45 @@ mod tests {
         let tree = transform(&document);
         let item = tree.root_ids()[0];
 
-        assert_eq!(tree.node(item).detail, None);
+        assert_eq!(tree.detail(item), None);
     }
 
     #[test]
     fn every_node_outputs_its_canonical_json_pointer() {
         let tree = parse(r#"["rust", {"a/b": {"~key": "value"}}]"#);
         let root = tree.root_ids()[0];
-        let text = tree.node(root).children[0];
-        let object = tree.node(root).children[1];
-        let slash_key = tree.node(object).children[0];
-        let tilde_key = tree.node(slash_key).children[0];
+        let text = tree.children_of(root)[0];
+        let object = tree.children_of(root)[1];
+        let slash_key = tree.children_of(object)[0];
+        let tilde_key = tree.children_of(slash_key)[0];
 
-        assert_eq!(tree.node(root).action.output, OsStr::new(""));
+        assert_eq!(tree.output(root), OsStr::new(""));
         assert_eq!(
-            tree.node(root).action.alternate_output,
+            tree.alternate_output(root),
             OsStr::new(r#"["rust",{"a/b":{"~key":"value"}}]"#)
         );
-        assert_eq!(tree.node(root).action.path, OsStr::new(""));
-        assert_eq!(tree.node(text).action.output, OsStr::new("/0"));
-        assert_eq!(
-            tree.node(text).action.alternate_output,
-            OsStr::new(r#""rust""#)
-        );
-        assert_eq!(tree.node(text).action.path, OsStr::new("/0"));
-        assert_eq!(tree.node(slash_key).action.output, OsStr::new("/1/a~1b"));
-        assert_eq!(tree.node(slash_key).action.path, OsStr::new("/1/a~1b"));
-        assert_eq!(
-            tree.node(tilde_key).action.path,
-            OsStr::new("/1/a~1b/~0key")
-        );
-        assert_eq!(
-            tree.node(tilde_key).action.relpath,
-            tree.node(tilde_key).action.path
-        );
-        assert_eq!(
-            tree.node(tilde_key).action.output,
-            OsStr::new("/1/a~1b/~0key")
-        );
-        assert_eq!(
-            tree.node(tilde_key).action.alternate_output,
-            OsStr::new(r#""value""#)
-        );
+        assert_eq!(tree.path(root), OsStr::new(""));
+        assert_eq!(tree.output(text), OsStr::new("/0"));
+        assert_eq!(tree.alternate_output(text), OsStr::new(r#""rust""#));
+        assert_eq!(tree.path(text), OsStr::new("/0"));
+        assert_eq!(tree.output(slash_key), OsStr::new("/1/a~1b"));
+        assert_eq!(tree.path(slash_key), OsStr::new("/1/a~1b"));
+        assert_eq!(tree.path(tilde_key), OsStr::new("/1/a~1b/~0key"));
+        assert_eq!(tree.relpath(tilde_key), tree.path(tilde_key));
+        assert_eq!(tree.output(tilde_key), OsStr::new("/1/a~1b/~0key"));
+        assert_eq!(tree.alternate_output(tilde_key), OsStr::new(r#""value""#));
     }
 
     #[test]
     fn scalar_and_empty_object_roots_remain_selectable() {
         let scalar = parse("null");
         assert_eq!(names(&scalar, scalar.root_ids()), ["$: null"]);
-        assert_eq!(
-            scalar.node(scalar.root_ids()[0]).action.output,
-            OsStr::new("")
-        );
+        assert_eq!(scalar.output(scalar.root_ids()[0]), OsStr::new(""));
 
         let empty = parse("{}");
         assert_eq!(names(&empty, empty.root_ids()), ["$ {}"]);
-        assert_eq!(
-            empty.node(empty.root_ids()[0]).action.output,
-            OsStr::new("")
-        );
-        assert!(empty.node(empty.root_ids()[0]).is_container);
+        assert_eq!(empty.output(empty.root_ids()[0]), OsStr::new(""));
+        assert!(empty.is_container(empty.root_ids()[0]));
         assert!(empty.is_leaf(empty.root_ids()[0]));
     }
 
@@ -397,11 +373,11 @@ mod tests {
             ["project {4}", "users [3]", "settings {}", "version: 1"]
         );
         assert_eq!(
-            tree.node(tree.root_ids()[0]).detail.as_deref(),
+            tree.detail(tree.root_ids()[0]).as_deref(),
             Some(r#"name: "ite" · status: "experimental""#)
         );
         let users = tree.root_ids()[1];
-        assert_eq!(tree.node(users).children.len(), 3);
-        assert_eq!(tree.node(tree.node(users).children[2]).name, "[2]: null");
+        assert_eq!(tree.children_of(users).len(), 3);
+        assert_eq!(tree.name(tree.children_of(users)[2]), "[2]: null");
     }
 }

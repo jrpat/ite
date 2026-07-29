@@ -305,7 +305,7 @@ mod tests {
 
         let tree = load_tree(&cli).unwrap();
 
-        assert_eq!(tree.node(tree.root_ids()[0]).name, "$ [2]");
+        assert_eq!(tree.name(tree.root_ids()[0]), "$ [2]");
     }
 
     #[test]
@@ -315,7 +315,7 @@ mod tests {
 
         let tree = load_tree(&cli(Some(dir.path().to_path_buf()))).unwrap();
 
-        assert_eq!(tree.node(tree.root_ids()[0]).name, "file.txt");
+        assert_eq!(tree.name(tree.root_ids()[0]), "file.txt");
     }
 
     #[test]

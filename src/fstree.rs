@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::tree::{ActionValues, Node, NodeId, Tree};
+use crate::tree::{ActionValues, NodeId, Tree};
 
 /// Scan `dir`, honoring ignore files unless `no_ignore` is set.
 ///
@@ -38,17 +38,7 @@ pub fn scan(dir: &Path, no_ignore: bool) -> std::io::Result<Tree> {
 
     // The walker sorts alphabetically; reorder each sibling list to put
     // directories first.
-    let dirs_first = |nodes: &[Node], ids: &mut Vec<NodeId>| {
-        ids.sort_by_key(|&id| !nodes[id].is_container);
-    };
-    let mut roots = std::mem::take(&mut tree.roots);
-    dirs_first(&tree.nodes, &mut roots);
-    tree.roots = roots;
-    for id in 0..tree.nodes.len() {
-        let mut children = std::mem::take(&mut tree.nodes[id].children);
-        dirs_first(&tree.nodes, &mut children);
-        tree.nodes[id].children = children;
-    }
+    tree.containers_first();
     Ok(tree)
 }
 
@@ -81,10 +71,7 @@ mod tests {
     }
 
     fn root_names(tree: &Tree) -> Vec<String> {
-        tree.root_ids()
-            .iter()
-            .map(|&id| tree.node(id).name.clone())
-            .collect()
+        tree.root_ids().iter().map(|&id| tree.name(id)).collect()
     }
 
     #[test]
@@ -120,13 +107,13 @@ mod tests {
         let dir = fixture();
         let tree = scan(dir.path(), false).unwrap();
         let b_dir = tree.root_ids()[0];
-        assert_eq!(tree.node(b_dir).name, "b-dir");
-        assert_eq!(tree.node(b_dir).depth, 0);
-        let kids = tree.node(b_dir).children.clone();
+        assert_eq!(tree.name(b_dir), "b-dir");
+        assert_eq!(tree.depth(b_dir), 0);
+        let kids = tree.children_of(b_dir).to_vec();
         assert_eq!(kids.len(), 1);
-        assert_eq!(tree.node(kids[0]).name, "inner.txt");
-        assert_eq!(tree.node(kids[0]).depth, 1);
-        assert_eq!(tree.node(kids[0]).parent, Some(b_dir));
+        assert_eq!(tree.name(kids[0]), "inner.txt");
+        assert_eq!(tree.depth(kids[0]), 1);
+        assert_eq!(tree.parent(kids[0]), Some(b_dir));
     }
 
     #[test]
@@ -134,15 +121,12 @@ mod tests {
         let dir = fixture();
         let tree = scan(dir.path(), false).unwrap();
         let b_dir = tree.root_ids()[0];
-        let inner = tree.node(b_dir).children[0];
-        assert!(Path::new(&tree.node(inner).action.path).is_absolute());
-        assert!(Path::new(&tree.node(inner).action.path).ends_with("b-dir/inner.txt"));
+        let inner = tree.children_of(b_dir)[0];
+        assert!(Path::new(&tree.path(inner)).is_absolute());
+        assert!(Path::new(&tree.path(inner)).ends_with("b-dir/inner.txt"));
+        assert_eq!(tree.relpath(inner), Path::new("b-dir/inner.txt").as_os_str());
         assert_eq!(
-            tree.node(inner).action.relpath,
-            Path::new("b-dir/inner.txt").as_os_str()
-        );
-        assert_eq!(
-            tree.node(inner).action.alternate_output,
+            tree.alternate_output(inner),
             std::ffi::OsStr::new("inner.txt")
         );
     }
@@ -155,7 +139,7 @@ mod tests {
             tree.root_ids()
                 .iter()
                 .copied()
-                .find(|&id| tree.node(id).name == name)
+                .find(|&id| tree.name(id) == name)
                 .unwrap()
         };
         assert!(!tree.is_leaf(by_name("b-dir")));
@@ -170,7 +154,7 @@ mod tests {
         let tree = scan(dir.path(), false).unwrap();
         let b_dir = tree.root_ids()[0];
         match tree.children(b_dir) {
-            TreeChildren::Loaded(kids) => assert_eq!(kids, tree.node(b_dir).children.as_slice()),
+            TreeChildren::Loaded(kids) => assert_eq!(kids, tree.children_of(b_dir)),
             other => panic!("expected Loaded, got {other:?}"),
         }
         let empty = tree.root_ids()[1];
@@ -181,10 +165,7 @@ mod tests {
     fn branches_lists_expandable_dirs() {
         let dir = fixture();
         let tree = scan(dir.path(), false).unwrap();
-        let names: Vec<&str> = tree
-            .branches()
-            .map(|(id, _)| tree.node(id).name.as_str())
-            .collect();
+        let names: Vec<String> = tree.branches().map(|(id, _)| tree.name(id)).collect();
         assert_eq!(names, ["b-dir"]);
     }
 }

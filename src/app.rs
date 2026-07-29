@@ -94,7 +94,7 @@ impl App {
             Some(ExpandSpec::Depth(n)) => {
                 let branches: Vec<_> = app.tree.branches().collect();
                 for (id, parent) in branches {
-                    if app.tree.node(id).depth < n {
+                    if app.tree.depth(id) < n {
                         app.state.set_expanded(id, parent, true);
                     }
                 }
@@ -158,7 +158,7 @@ impl App {
         self.state.ensure_projection(&self.tree, &self.query);
         self.state
             .visible_ids()
-            .map(|id| self.tree.node(id).name.clone())
+            .map(|id| self.tree.name(id))
             .collect()
     }
 
@@ -196,8 +196,8 @@ impl App {
                     None => Effect::None,
                     Some(id) => Effect::RunShell {
                         cmd,
-                        path: self.tree.node(id).action.path.clone(),
-                        relpath: self.tree.node(id).action.relpath.clone(),
+                        path: self.tree.path(id),
+                        relpath: self.tree.relpath(id),
                         bg: binding.bg,
                         exit: binding.exit,
                     },
@@ -223,7 +223,7 @@ impl App {
                         // Nothing to open: step along to the next sibling.
                         self.move_sibling(1);
                     } else if self.state.node_is_expanded(id, parent) {
-                        self.state.select_id(Some(self.tree.node(id).children[0]));
+                        self.state.select_id(Some(self.tree.children_of(id)[0]));
                     } else {
                         self.state.set_expanded(id, parent, true);
                     }
@@ -268,20 +268,20 @@ impl App {
             AppCommand::Select => {
                 if let Some(id) = self.focused_id() {
                     if self.tree.is_leaf(id) {
-                        return Effect::PrintAndExit(self.tree.node(id).action.output.clone());
+                        return Effect::PrintAndExit(self.tree.output(id));
                     }
                     self.state.set_expanded(id, self.tree.view_parent(id), true);
                 }
             }
             AppCommand::Accept => {
                 if let Some(id) = self.focused_id() {
-                    return Effect::PrintAndExit(self.tree.node(id).action.output.clone());
+                    return Effect::PrintAndExit(self.tree.output(id));
                 }
             }
             AppCommand::AcceptAlternate => {
                 if let Some(id) = self.focused_id() {
                     return Effect::PrintAndExit(
-                        self.tree.node(id).action.alternate_output.clone(),
+                        self.tree.alternate_output(id),
                     );
                 }
             }
@@ -289,7 +289,7 @@ impl App {
                 if let Some(id) = self.focused_branch() {
                     self.state.set_expanded(id, self.tree.view_parent(id), true);
                     self.state.ensure_projection(&self.tree, &self.query);
-                    let first_child = self.tree.node(id).children[0];
+                    let first_child = self.tree.children_of(id)[0];
                     self.state.select_id(Some(first_child));
                 }
             }
@@ -352,7 +352,7 @@ impl App {
             if !self.tree.is_leaf(id) {
                 self.state
                     .set_expanded(id, self.tree.view_parent(id), expanded);
-                stack.extend_from_slice(&self.tree.node(id).children);
+                stack.extend_from_slice(self.tree.children_of(id));
             }
         }
     }
@@ -383,7 +383,7 @@ impl App {
         if let Some(current_root) = self.tree.view_root() {
             let expanded = self.state.node_is_expanded(current_root, None);
             self.state
-                .set_expanded(current_root, self.tree.node(current_root).parent, expanded);
+                .set_expanded(current_root, self.tree.parent(current_root), expanded);
         }
 
         self.tree.set_view_root(previous_root);
@@ -399,8 +399,8 @@ impl App {
         if self.tree.view_root() == Some(id) {
             return;
         }
-        let siblings = match self.tree.node(id).parent {
-            Some(parent) => self.tree.node(parent).children.as_slice(),
+        let siblings = match self.tree.parent(id) {
+            Some(parent) => self.tree.children_of(parent),
             None => self.tree.root_ids(),
         };
         let pos = siblings.iter().position(|&s| s == id).unwrap_or(0) as isize;
@@ -471,7 +471,7 @@ mod tests {
 
     fn focused_name(app: &mut App) -> String {
         let id = app.focused_id().expect("something focused");
-        app.tree.node(id).name.clone()
+        app.tree.name(id)
     }
 
     #[test]

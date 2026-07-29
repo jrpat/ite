@@ -68,7 +68,7 @@ impl Jump {
     pub fn open(tree: &Tree) -> Self {
         let candidates: Vec<_> = (0..tree.len())
             .map(|id| Candidate {
-                path: tree.node(id).action.relpath.to_string_lossy().into_owned(),
+                path: tree.jump_key(id),
                 active: tree.is_in_view(id),
             })
             .collect();
