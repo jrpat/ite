@@ -203,9 +203,12 @@ impl App {
                 self.state.select_prev();
             }
             AppCommand::Expand => {
-                if let Some(id) = self.focused_branch() {
+                if let Some(id) = self.focused_id() {
                     let parent = self.tree.view_parent(id);
-                    if self.state.node_is_expanded(id, parent) {
+                    if self.tree.is_leaf(id) {
+                        // Nothing to open: step along to the next sibling.
+                        self.move_sibling(1);
+                    } else if self.state.node_is_expanded(id, parent) {
                         self.state.select_id(Some(self.tree.node(id).children[0]));
                     } else {
                         self.state.set_expanded(id, parent, true);
@@ -224,7 +227,12 @@ impl App {
             }
             AppCommand::ExpandRecursively => {
                 if let Some(id) = self.focused_id() {
-                    self.set_expanded_recursively(id, true);
+                    if self.tree.is_leaf(id) {
+                        // Nothing to open: step along to the next sibling.
+                        self.move_sibling(1);
+                    } else {
+                        self.set_expanded_recursively(id, true);
+                    }
                 }
             }
             AppCommand::CollapseRecursively => {
@@ -411,6 +419,21 @@ mod tests {
         (dir, App::new(tree, &Config::default(), None))
     }
 
+    /// The main fixture has no leaf with a following sibling. Builds:
+    ///   root/
+    ///     d/
+    ///       d1.txt
+    ///       d2.txt
+    fn app_with_leaf_siblings() -> (tempfile::TempDir, App) {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        std::fs::create_dir(p.join("d")).unwrap();
+        std::fs::write(p.join("d/d1.txt"), "").unwrap();
+        std::fs::write(p.join("d/d2.txt"), "").unwrap();
+        let tree = fstree::scan(p, false).unwrap();
+        (dir, App::new(tree, &Config::default(), None))
+    }
+
     fn focused_name(app: &mut App) -> String {
         let id = app.focused_id().expect("something focused");
         app.tree.node(id).name.clone()
@@ -456,11 +479,38 @@ mod tests {
     }
 
     #[test]
-    fn expand_is_noop_on_leaf() {
+    fn l_on_leaf_focuses_next_sibling() {
+        let (_d, mut app) = app_with_leaf_siblings();
+        app.run_command(AppCommand::Expand); // expand "d"
+        app.run_command(AppCommand::Down); // focus "d1.txt"
+
+        app.handle_key(Key::parse("l").unwrap());
+
+        assert_eq!(focused_name(&mut app), "d2.txt");
+        assert_eq!(app.visible_names(), ["d", "d1.txt", "d2.txt"]);
+    }
+
+    #[test]
+    fn l_on_last_leaf_of_a_container_stays_inside_it() {
+        let (_d, mut app) = app();
+        app.run_command(AppCommand::Expand); // expand "a"
+        app.run_command(AppCommand::Down); // focus "aa"
+        app.run_command(AppCommand::Down); // focus "ab.txt", last child of "a"
+
+        app.handle_key(Key::parse("l").unwrap());
+
+        // Does not spill over to "b": siblings, not the next visible row.
+        assert_eq!(focused_name(&mut app), "ab.txt");
+        assert_eq!(app.visible_names(), ["a", "aa", "ab.txt", "b", "c.txt"]);
+    }
+
+    #[test]
+    fn expand_on_the_last_top_level_leaf_is_a_noop() {
         let (_d, mut app) = app();
         app.run_command(AppCommand::Last);
         assert_eq!(focused_name(&mut app), "c.txt");
         assert_eq!(app.run_command(AppCommand::Expand), Effect::None);
+        assert_eq!(focused_name(&mut app), "c.txt");
         assert_eq!(app.visible_names(), ["a", "b", "c.txt"]);
     }
 
@@ -509,6 +559,38 @@ mod tests {
             app.visible_names(),
             ["a", "aa", "aaa.txt", "ab.txt", "b", "c.txt"]
         );
+    }
+
+    #[test]
+    fn shift_l_on_a_container_leaves_focus_on_it() {
+        let (_d, mut app) = app();
+
+        app.handle_key(Key::parse("L").unwrap());
+
+        assert_eq!(focused_name(&mut app), "a");
+    }
+
+    #[test]
+    fn shift_l_on_leaf_focuses_next_sibling() {
+        let (_d, mut app) = app_with_leaf_siblings();
+        app.run_command(AppCommand::Expand); // expand "d"
+        app.run_command(AppCommand::Down); // focus "d1.txt"
+
+        app.handle_key(Key::parse("L").unwrap());
+
+        assert_eq!(focused_name(&mut app), "d2.txt");
+        assert_eq!(app.visible_names(), ["d", "d1.txt", "d2.txt"]);
+    }
+
+    #[test]
+    fn shift_l_on_the_last_top_level_leaf_is_a_noop() {
+        let (_d, mut app) = app();
+        app.run_command(AppCommand::Last); // focus "c.txt"
+
+        app.handle_key(Key::parse("L").unwrap());
+
+        assert_eq!(focused_name(&mut app), "c.txt");
+        assert_eq!(app.visible_names(), ["a", "b", "c.txt"]);
     }
 
     #[test]

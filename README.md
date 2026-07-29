@@ -99,9 +99,9 @@ Navigation is vim-flavored:
 | Key | Action |
 |-----|--------|
 | `j` / `↓`, `k` / `↑` | Move focus down / up, one visible line |
-| `l` / `→` | Expand a collapsed container; on an expanded container, focus its first child |
+| `l` / `→` | Expand a collapsed container; on an expanded container, focus its first child; on a leaf, focus the next sibling |
 | `h` / `←` | Collapse an expanded container; otherwise focus its parent |
-| `L` / `shift+→` | Expand recursively |
+| `L` / `shift+→` | Expand recursively; on a leaf, focus the next sibling |
 | `H` / `shift+←` | Collapse an expanded container recursively; otherwise collapse its parent recursively and focus it |
 | `enter` | Expand a collapsed container; on a leaf, print its path or JSON Pointer and exit |
 | `ctrl+enter` | Print the focused path or JSON Pointer and exit, container or not |

@@ -12,11 +12,13 @@ pub enum AppCommand {
     Down,
     /// Move focus to the previous on-screen line.
     Up,
-    /// Expand the focused non-leaf, or focus its first child if already expanded.
+    /// Expand the focused non-leaf, focus its first child if already expanded,
+    /// or focus the next sibling of a leaf.
     Expand,
     /// Collapse the focused expanded branch, or focus its parent.
     Collapse,
-    /// Expand the focused non-leaf recursively.
+    /// Expand the focused non-leaf recursively, or focus the next sibling of
+    /// a leaf.
     ExpandRecursively,
     /// Collapse the focused expanded branch recursively, or collapse its
     /// parent recursively and focus it.
