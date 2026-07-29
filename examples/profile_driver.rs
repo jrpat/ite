@@ -3,8 +3,16 @@
 //! app's internal span profile (via ITE_PROFILE).
 //!
 //! Usage: cargo profile-tui [PATH] [ITERS]
-//!   PATH   directory to explore (default ".")
+//!   PATH   directory or JSON/JSONL file to explore (default ".")
 //!   ITERS  repetitions for the j/k phases (default 15)
+//!
+//! A directory runs eagerly (`-e all`), preserving the historical baseline.
+//! A file is passed via `--json` so ite's own content detection picks JSON
+//! vs JSONL, and startup stays lazy — the point of profiling a file is the
+//! cooperative sweep and the synchronous-expand hitches, so the driver must
+//! not force `--expand`. Expansion-heavy phases get long response deadlines:
+//! a keypress that materializes a huge span is exactly what we came to
+//! measure, not a "silent" key to give up on.
 
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
@@ -28,6 +36,10 @@ fn main() {
         .map(|s| s.parse().expect("ITERS must be a number"))
         .unwrap_or(15);
 
+    let meta = std::fs::metadata(&path)
+        .unwrap_or_else(|error| panic!("cannot stat {path}: {error}"));
+    let is_dir = meta.is_dir();
+
     let build = std::process::Command::new("cargo")
         .args(["build", "--release", "--bin", "ite", "-q"])
         .status()
@@ -46,7 +58,11 @@ fn main() {
         .expect("openpty");
     let ite_bin = std::env::current_dir().unwrap().join("target/release/ite");
     let mut cmd = CommandBuilder::new(ite_bin);
-    cmd.args(["-e", "all", &path]);
+    if is_dir {
+        cmd.args(["-e", "all", &path]);
+    } else {
+        cmd.args(["--json", &path]);
+    }
     cmd.env("ITE_PROFILE", &profile_path);
     cmd.cwd(std::env::current_dir().unwrap());
     let mut child = pty.slave.spawn_command(cmd).expect("spawn ite");
@@ -96,14 +112,35 @@ fn main() {
         });
     }
 
-    // Wait for the first frame.
+    // Wait for the first frame; a load error (bad file, not JSON) makes ite
+    // exit before drawing, which must fail the run, not skew it.
     let startup = Instant::now();
     while output.lock().unwrap().bytes == 0 && startup.elapsed() < Duration::from_secs(10) {
+        if let Some(status) = child.try_wait().expect("try_wait") {
+            panic!("ite exited during startup ({status}); is {path} a valid input?");
+        }
         std::thread::sleep(Duration::from_millis(1));
     }
-    wait_quiet(&output, Duration::from_millis(150), Duration::from_secs(10));
+    let first_frame = startup.elapsed();
+    // The cooperative sweep keeps the event loop drawing until the index is
+    // complete, so on a lazy file "settled" ≈ time to full index; report it
+    // separately from first paint. Cap generously: a big file sweeps for a
+    // while.
+    wait_quiet(&output, Duration::from_millis(150), Duration::from_secs(120));
+    if let Some(status) = child.try_wait().expect("try_wait") {
+        panic!("ite exited during startup ({status}); is {path} a valid input?");
+    }
     println!(
-        "startup to first stable frame: {}",
+        "target: {path} ({})",
+        if is_dir {
+            "directory, eager -e all"
+        } else {
+            "JSON/JSONL file, lazy startup"
+        }
+    );
+    println!("startup to first frame: {}", format_duration(first_frame));
+    println!(
+        "output settled (index + repaints done): {}",
         format_duration(startup.elapsed())
     );
     println!();
@@ -120,26 +157,45 @@ fn main() {
         .take(20)
         .map(|b| b.as_slice())
         .collect();
-    let phases: Vec<(&str, Vec<&[u8]>)> = vec![
-        ("j (down)", vec![b"j"; iters]),
-        ("k (up)", vec![b"k"; iters]),
-        ("j/k alternate", jk),
-        ("l/h toggle", lh),
-        ("H (collapse-rec)", vec![b"H"]),
-        ("L (expand-rec)", vec![b"L"]),
-        ("G then gg", vec![b"G", b"gg"]),
+    let fast = Duration::from_millis(300);
+    let expand = Duration::from_secs(10);
+    let heavy = Duration::from_secs(60);
+    let mut phases: Vec<(&str, Vec<&[u8]>, Duration)> = vec![
+        ("j (down)", vec![b"j"; iters], fast),
+        ("k (up)", vec![b"k"; iters], fast),
+        ("j/k alternate", jk, fast),
+        ("l/h toggle", lh, expand),
     ];
+    // H/L order depends on the starting expansion state: a directory opens
+    // fully expanded (-e all), so collapse first; a lazy file opens at level
+    // 1, so expand first — the other order makes one of them a no-op that
+    // would stall for the whole deadline. For files, G/gg runs while the
+    // tree is fully expanded so the projection over every row gets measured.
+    if is_dir {
+        phases.push(("H (collapse-rec)", vec![b"H"], expand));
+        phases.push(("L (expand-rec)", vec![b"L"], heavy));
+        phases.push(("G then gg", vec![b"G", b"gg"], expand));
+    } else {
+        phases.push(("L (expand-rec)", vec![b"L"], heavy));
+        phases.push(("G then gg", vec![b"G", b"gg"], expand));
+        phases.push(("H (collapse-rec)", vec![b"H"], expand));
+    }
+    // The picker only opens over a complete index; on a big file this
+    // measures the blocking-indexing progress plus candidate ranking. The
+    // esc closes whatever state `/` left (progress line or picker) so the
+    // final `q` reaches Normal mode.
+    phases.push(("/ then esc", vec![b"/", b"\x1b"], Duration::from_secs(30)));
 
     println!(
         "{:<18} {:>5} {:>6} {:>9} {:>9} {:>9} {:>9} {:>10}",
         "phase", "keys", "silent", "mean", "p50", "p95", "max", "bytes/key"
     );
-    for (name, keys) in phases {
+    for (name, keys, deadline) in phases {
         let mut latencies = Vec::new();
         let mut silent = 0usize;
         let mut bytes_total = 0u64;
         for key in &keys {
-            match send_key(&writer, &output, key) {
+            match send_key(&writer, &output, key, deadline) {
                 Some((latency, bytes)) => {
                     latencies.push(latency);
                     bytes_total += bytes;
@@ -195,11 +251,14 @@ fn main() {
 
 /// Send one key (or chord) and wait for the redraw it causes.
 /// Returns first-byte latency and bytes emitted, or `None` if the app stayed
-/// silent (a no-op key produces an empty diff and writes nothing).
+/// silent for `deadline` (a no-op key produces an empty diff and writes
+/// nothing; a materializing key can legitimately take seconds, which is why
+/// the deadline is per-phase).
 fn send_key(
     writer: &Arc<Mutex<Box<dyn Write + Send>>>,
     output: &Arc<Mutex<Output>>,
     key: &[u8],
+    deadline: Duration,
 ) -> Option<(Duration, u64)> {
     let before = output.lock().unwrap().bytes;
     let sent_at = Instant::now();
@@ -212,7 +271,7 @@ fn send_key(
         if output.lock().unwrap().bytes > before {
             break sent_at.elapsed();
         }
-        if sent_at.elapsed() > Duration::from_millis(300) {
+        if sent_at.elapsed() > deadline {
             return None;
         }
         std::thread::sleep(Duration::from_micros(200));

@@ -22,9 +22,14 @@ stdout and exits. The TUI renders on **stderr** so stdout can be piped.
   `.cargo/config.toml`): runs the release binary in a real PTY
   (`examples/profile_driver.rs`), answers its terminal queries, simulates
   keypresses, and prints per-key round-trip latency plus the app's internal
-  span table. Spans come from `src/profile.rs` and are enabled by
-  `ITE_PROFILE=<output-path>`; add `profile::span("label")` guards to
-  instrument new hot paths.
+  span table. PATH may be a directory (run eagerly via `-e all`, the
+  historical baseline) or a JSON/JSONL file (passed via `--json` so ite's
+  content detection picks the mode; startup stays lazy, the report splits
+  first paint from index settle, and expansion phases get long response
+  deadlines so synchronous-materialization hitches are measured rather than
+  written off as silent keys). Spans come from `src/profile.rs` and are
+  enabled by `ITE_PROFILE=<output-path>`; add `profile::span("label")`
+  guards to instrument new hot paths.
 
 ## Development rules
 

@@ -42,6 +42,7 @@ impl std::error::Error for Error {}
 /// Read the input, detect JSON vs JSONL from the content (one uniform rule,
 /// however the input arrived), and build the tree.
 pub fn from_reader(mut reader: impl Read) -> Result<Tree, Error> {
+    let _span = crate::profile::span("json_tree::load");
     let bytes = slurp(reader.by_ref())?;
     if detect_jsonl(&bytes) {
         jsonl_from_bytes(bytes)
@@ -54,6 +55,7 @@ pub fn from_reader(mut reader: impl Read) -> Result<Tree, Error> {
 /// `--jsonl` escape hatch for content that is also valid JSON (e.g. a single
 /// record).
 pub fn jsonl_from_reader(mut reader: impl Read) -> Result<Tree, Error> {
+    let _span = crate::profile::span("json_tree::load");
     let bytes = slurp(reader.by_ref())?;
     jsonl_from_bytes(bytes)
 }
