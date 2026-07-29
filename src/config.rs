@@ -20,6 +20,10 @@ pub enum AppCommand {
     /// Expand the focused non-leaf recursively, or focus the next sibling of
     /// a leaf.
     ExpandRecursively,
+    /// Flip the focused container between expanded and collapsed.
+    Toggle,
+    /// Flip the focused container, expanding or collapsing recursively.
+    ToggleRecursively,
     /// Collapse the focused expanded branch recursively, or collapse its
     /// parent recursively and focus it.
     CollapseRecursively,
@@ -67,6 +71,8 @@ impl AppCommand {
             "expand" => Self::Expand,
             "collapse" => Self::Collapse,
             "expand-recursively" => Self::ExpandRecursively,
+            "toggle" => Self::Toggle,
+            "toggle-recursively" => Self::ToggleRecursively,
             "collapse-recursively" => Self::CollapseRecursively,
             "select" => Self::Select,
             "accept" => Self::Accept,
@@ -315,6 +321,8 @@ cmd = "expand-recursively"
             ("collapse", AppCommand::Collapse),
             ("expand-recursively", AppCommand::ExpandRecursively),
             ("collapse-recursively", AppCommand::CollapseRecursively),
+            ("toggle", AppCommand::Toggle),
+            ("toggle-recursively", AppCommand::ToggleRecursively),
             ("select", AppCommand::Select),
             ("accept", AppCommand::Accept),
             ("accept-alternate", AppCommand::AcceptAlternate),

@@ -24,8 +24,13 @@ impl Key {
             if self.mods.contains(KeyModifiers::SHIFT) && c.is_alphabetic() {
                 self.code = KeyCode::Char(c.to_ascii_uppercase());
             }
-            // SHIFT carries no extra information for character keys.
-            self.mods.remove(KeyModifiers::SHIFT);
+            // SHIFT carries no extra information for character keys: the
+            // terminal sends the shifted glyph itself. Space is the exception,
+            // shifted or not it is still a space, so the modifier has to
+            // survive for `shift+space` to be its own binding.
+            if c != ' ' {
+                self.mods.remove(KeyModifiers::SHIFT);
+            }
         }
         self
     }
@@ -165,6 +170,22 @@ mod tests {
             Key::parse("space").unwrap(),
             key(KeyCode::Char(' '), KeyModifiers::NONE)
         );
+    }
+
+    #[test]
+    fn shift_space_stays_distinct_from_space() {
+        // Space is the one character key whose shifted form is the same glyph,
+        // so the modifier is all that tells the two apart.
+        assert_ne!(
+            Key::parse("shift+space").unwrap(),
+            Key::parse("space").unwrap()
+        );
+        assert_eq!(
+            Key::parse("shift+space").unwrap(),
+            key(KeyCode::Char(' '), KeyModifiers::SHIFT)
+        );
+        let ev = KeyEvent::new(KeyCode::Char(' '), KeyModifiers::SHIFT);
+        assert_eq!(Key::from_event(ev), Key::parse("shift+space").unwrap());
     }
 
     #[test]

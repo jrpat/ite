@@ -103,6 +103,7 @@ Navigation is vim-flavored:
 | `h` / `←` | Collapse an expanded container; otherwise focus its parent |
 | `L` / `shift+→` | Expand recursively; on a leaf, focus the next sibling |
 | `H` / `shift+←` | Collapse an expanded container recursively; otherwise collapse its parent recursively and focus it |
+| `space` / `ctrl+space` | Toggle a container open or shut, plainly / recursively |
 | `enter` | Expand a collapsed container; on a leaf, print its path or JSON Pointer and exit |
 | `ctrl+enter` | Print the focused path or JSON Pointer and exit, container or not |
 | `alt+enter` | Print the focused basename or compact JSON value and exit |
@@ -146,10 +147,10 @@ Without `bg`, the TUI steps aside while your command runs and returns when it
 finishes; editors work exactly as you'd hope.
 
 `cmd` accepts any built-in command: `down`, `up`, `expand`, `collapse`,
-`expand-recursively`, `collapse-recursively`, `select`, `accept`,
-`accept-alternate`, `descend`, `root`, `pop-root`, `back`, `next-sibling`,
-`prev-sibling`, `page-down`, `page-up`, `half-page-down`, `half-page-up`,
-`first`, `last`, `jump`, `quit`.
+`expand-recursively`, `collapse-recursively`, `toggle`, `toggle-recursively`,
+`select`, `accept`, `accept-alternate`, `descend`, `root`, `pop-root`, `back`,
+`next-sibling`, `prev-sibling`, `page-down`, `page-up`, `half-page-down`,
+`half-page-up`, `first`, `last`, `jump`, `quit`.
 
 User bindings override the defaults, so if you bind `j` to something exotic,
 `ite` assumes you meant it.

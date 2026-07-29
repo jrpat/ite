@@ -106,6 +106,8 @@ impl App {
             (&["h", "left"], AppCommand::Collapse),
             (&["L", "shift+right"], AppCommand::ExpandRecursively),
             (&["H", "shift+left"], AppCommand::CollapseRecursively),
+            (&["space"], AppCommand::Toggle),
+            (&["ctrl+space"], AppCommand::ToggleRecursively),
             (&["enter"], AppCommand::Select),
             (&["ctrl+enter"], AppCommand::Accept),
             (&["alt+enter"], AppCommand::AcceptAlternate),
@@ -249,6 +251,8 @@ impl App {
                     }
                 }
             }
+            AppCommand::Toggle => self.toggle_focused(false),
+            AppCommand::ToggleRecursively => self.toggle_focused(true),
             AppCommand::Select => {
                 if let Some(id) = self.focused_id() {
                     if self.tree.is_leaf(id) {
@@ -309,6 +313,24 @@ impl App {
     /// The focused node if it is expandable.
     fn focused_branch(&mut self) -> Option<NodeId> {
         self.focused_id().filter(|&id| !self.tree.is_leaf(id))
+    }
+
+    /// Flip the focused container's expansion, leaving focus on it. A leaf has
+    /// nothing to toggle. The direction comes from the focused node's own
+    /// state, so a recursive toggle on an open container shuts it rather than
+    /// opening what is still shut underneath.
+    fn toggle_focused(&mut self, recursive: bool) {
+        let Some(id) = self.focused_id() else { return };
+        if self.tree.is_leaf(id) {
+            return;
+        }
+        let parent = self.tree.view_parent(id);
+        let expand = !self.state.node_is_expanded(id, parent);
+        if recursive {
+            self.set_expanded_recursively(id, expand);
+        } else {
+            self.state.set_expanded(id, parent, expand);
+        }
     }
 
     fn set_expanded_recursively(&mut self, root: NodeId, expanded: bool) {
@@ -559,6 +581,59 @@ mod tests {
             app.visible_names(),
             ["a", "aa", "aaa.txt", "ab.txt", "b", "c.txt"]
         );
+    }
+
+    #[test]
+    fn space_toggles_a_container_open_and_shut() {
+        let (_d, mut app) = app();
+
+        app.handle_key(Key::parse("space").unwrap());
+        assert_eq!(app.visible_names(), ["a", "aa", "ab.txt", "b", "c.txt"]);
+        assert_eq!(focused_name(&mut app), "a");
+
+        app.handle_key(Key::parse("space").unwrap());
+        assert_eq!(app.visible_names(), ["a", "b", "c.txt"]);
+        assert_eq!(focused_name(&mut app), "a");
+    }
+
+    #[test]
+    fn space_on_a_leaf_does_nothing() {
+        let (_d, mut app) = app();
+        app.run_command(AppCommand::Last); // focus "c.txt"
+
+        app.handle_key(Key::parse("space").unwrap());
+
+        assert_eq!(focused_name(&mut app), "c.txt");
+        assert_eq!(app.visible_names(), ["a", "b", "c.txt"]);
+    }
+
+    #[test]
+    fn ctrl_space_toggles_a_container_recursively() {
+        let (_d, mut app) = app();
+
+        app.handle_key(Key::parse("ctrl+space").unwrap());
+        assert_eq!(
+            app.visible_names(),
+            ["a", "aa", "aaa.txt", "ab.txt", "b", "c.txt"]
+        );
+        assert_eq!(focused_name(&mut app), "a");
+
+        app.handle_key(Key::parse("ctrl+space").unwrap());
+        assert_eq!(app.visible_names(), ["a", "b", "c.txt"]);
+        // Descendant expansion was cleared, not just hidden.
+        app.run_command(AppCommand::Expand);
+        assert_eq!(app.visible_names(), ["a", "aa", "ab.txt", "b", "c.txt"]);
+    }
+
+    #[test]
+    fn ctrl_space_direction_follows_the_focused_container() {
+        let (_d, mut app) = app();
+        app.run_command(AppCommand::Expand); // "a" expanded, "aa" still shut
+
+        // "a" is open, so the recursive toggle shuts it rather than reopening.
+        app.handle_key(Key::parse("ctrl+space").unwrap());
+
+        assert_eq!(app.visible_names(), ["a", "b", "c.txt"]);
     }
 
     #[test]
