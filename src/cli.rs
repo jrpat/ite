@@ -33,9 +33,15 @@ pub struct Cli {
     pub path: Option<PathBuf>,
 
     /// JSON file to explore instead of a directory; `-` reads stdin.
-    /// Piped stdin with no PATH is read as JSON automatically.
+    /// Piped stdin with no PATH is read as JSON automatically. JSONL
+    /// content is detected from the content itself.
     #[arg(short, long, value_name = "PATH", conflicts_with = "path")]
     pub json: Option<PathBuf>,
+
+    /// JSON Lines file to explore; `-` reads stdin. Forces the JSONL
+    /// reading when detection can't be sure (e.g. a single record).
+    #[arg(short = 'l', long, value_name = "PATH", conflicts_with_all = ["path", "json"])]
+    pub jsonl: Option<PathBuf>,
 
     /// Do not respect ignore files (.gitignore etc.).
     #[arg(short = 'I', long)]
@@ -63,6 +69,7 @@ mod tests {
         let cli = parse(&[]);
         assert_eq!(cli.path, None);
         assert_eq!(cli.json, None);
+        assert_eq!(cli.jsonl, None);
         assert!(!cli.no_ignore);
         assert_eq!(cli.expand, None);
         assert!(cli.config.is_empty());
@@ -88,6 +95,24 @@ mod tests {
     #[test]
     fn json_and_directory_paths_are_mutually_exclusive() {
         assert!(Cli::try_parse_from(["ite", "--json", "data.json", "/some/dir"]).is_err());
+    }
+
+    #[test]
+    fn jsonl_path_flag_and_alias() {
+        assert_eq!(
+            parse(&["--jsonl", "log.jsonl"]).jsonl,
+            Some(PathBuf::from("log.jsonl"))
+        );
+        assert_eq!(
+            parse(&["-l", "log.jsonl"]).jsonl,
+            Some(PathBuf::from("log.jsonl"))
+        );
+    }
+
+    #[test]
+    fn jsonl_conflicts_with_json_and_directory_paths() {
+        assert!(Cli::try_parse_from(["ite", "--jsonl", "a.jsonl", "--json", "b.json"]).is_err());
+        assert!(Cli::try_parse_from(["ite", "--jsonl", "a.jsonl", "/some/dir"]).is_err());
     }
 
     #[test]

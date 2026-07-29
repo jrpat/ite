@@ -78,15 +78,29 @@ fn run() -> Result<ExitCode, String> {
 
 /// Where the tree comes from. Piped JSON is consumed to EOF before the TUI
 /// starts; terminal input then falls back to /dev/tty (crossterm does this
-/// whenever stdin is not a tty).
+/// whenever stdin is not a tty). JSON inputs detect JSONL from the content;
+/// the Jsonl variants force that reading.
 #[derive(Debug, PartialEq, Eq)]
 enum Source {
     Dir(PathBuf),
     JsonFile(PathBuf),
     JsonStdin,
+    JsonlFile(PathBuf),
+    JsonlStdin,
 }
 
 fn choose_source(cli: &Cli, stdin_is_tty: bool) -> Result<Source, String> {
+    if let Some(path) = &cli.jsonl {
+        if path.as_os_str() == "-" {
+            if stdin_is_tty {
+                return Err(
+                    "--jsonl -: stdin is a terminal; pipe a JSON Lines document in".to_string(),
+                );
+            }
+            return Ok(Source::JsonlStdin);
+        }
+        return Ok(Source::JsonlFile(path.clone()));
+    }
     if let Some(path) = &cli.json {
         if path.as_os_str() == "-" {
             if stdin_is_tty {
@@ -104,15 +118,19 @@ fn choose_source(cli: &Cli, stdin_is_tty: bool) -> Result<Source, String> {
 }
 
 fn load_tree(cli: &Cli) -> Result<Tree, String> {
+    let open = |path: &PathBuf| {
+        std::fs::File::open(path)
+            .map_err(|error| format!("cannot open JSON file {}: {error}", path.display()))
+    };
     match choose_source(cli, std::io::stdin().is_terminal())? {
         Source::JsonStdin => ite_cli::json_tree::from_reader(std::io::stdin().lock())
             .map_err(|error| format!("stdin: {error}")),
-        Source::JsonFile(path) => {
-            let file = std::fs::File::open(&path)
-                .map_err(|error| format!("cannot open JSON file {}: {error}", path.display()))?;
-            ite_cli::json_tree::from_reader(file)
-                .map_err(|error| format!("{}: {error}", path.display()))
-        }
+        Source::JsonlStdin => ite_cli::json_tree::jsonl_from_reader(std::io::stdin().lock())
+            .map_err(|error| format!("stdin: {error}")),
+        Source::JsonFile(path) => ite_cli::json_tree::from_reader(open(&path)?)
+            .map_err(|error| format!("{}: {error}", path.display())),
+        Source::JsonlFile(path) => ite_cli::json_tree::jsonl_from_reader(open(&path)?)
+            .map_err(|error| format!("{}: {error}", path.display())),
         Source::Dir(dir) => {
             if !dir.is_dir() {
                 return Err(format!("{} is not a directory", dir.display()));
@@ -289,6 +307,7 @@ mod tests {
         Cli {
             path,
             json: None,
+            jsonl: None,
             no_ignore: false,
             expand: None,
             config: Vec::new(),
@@ -375,6 +394,47 @@ mod tests {
             choose_source(&cli, false).unwrap(),
             Source::JsonFile(PathBuf::from("data.json"))
         );
+    }
+
+    #[test]
+    fn jsonl_flag_selects_the_jsonl_file_and_dash_selects_stdin() {
+        let mut cli = cli(None);
+        cli.jsonl = Some(PathBuf::from("log.jsonl"));
+        assert_eq!(
+            choose_source(&cli, true).unwrap(),
+            Source::JsonlFile(PathBuf::from("log.jsonl"))
+        );
+
+        cli.jsonl = Some(PathBuf::from("-"));
+        assert_eq!(choose_source(&cli, false).unwrap(), Source::JsonlStdin);
+        assert!(choose_source(&cli, true).is_err());
+    }
+
+    #[test]
+    fn json_flag_detects_jsonl_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("records.json");
+        std::fs::write(&path, "1\n2\n").unwrap();
+        let mut cli = cli(None);
+        cli.json = Some(path);
+
+        let tree = load_tree(&cli).unwrap();
+
+        assert_eq!(tree.name(tree.root_ids()[0]), "$ [2]");
+    }
+
+    #[test]
+    fn jsonl_flag_forces_the_jsonl_reading() {
+        // A single scalar would detect as JSON; the flag forces JSONL.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("one.jsonl");
+        std::fs::write(&path, "7\n").unwrap();
+        let mut cli = cli(None);
+        cli.jsonl = Some(path);
+
+        let tree = load_tree(&cli).unwrap();
+
+        assert_eq!(tree.name(tree.root_ids()[0]), "$ [1]");
     }
 
     #[test]

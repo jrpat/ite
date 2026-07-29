@@ -34,15 +34,30 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
+/// Read the input, detect JSON vs JSONL from the content (one uniform rule,
+/// however the input arrived), and build the tree.
 pub fn from_reader(mut reader: impl Read) -> Result<Tree, Error> {
+    let bytes = slurp(reader.by_ref())?;
+    if detect_jsonl(&bytes) {
+        jsonl_from_bytes(bytes)
+    } else {
+        json_from_bytes(bytes)
+    }
+}
+
+/// Read the input as JSONL regardless of what detection would say — the
+/// `--jsonl` escape hatch for content that is also valid JSON (e.g. a single
+/// record).
+pub fn jsonl_from_reader(mut reader: impl Read) -> Result<Tree, Error> {
+    let bytes = slurp(reader.by_ref())?;
+    jsonl_from_bytes(bytes)
+}
+
+fn slurp(reader: &mut impl Read) -> Result<Vec<u8>, Error> {
     let mut bytes = Vec::new();
     reader
         .read_to_end(&mut bytes)
         .map_err(|error| Error(error.to_string()))?;
-    from_bytes(bytes)
-}
-
-fn from_bytes(bytes: Vec<u8>) -> Result<Tree, Error> {
     if u32::try_from(bytes.len()).is_err() {
         return Err(Error(
             "input exceeds the 4 GiB the span index addresses".to_owned(),
@@ -51,6 +66,50 @@ fn from_bytes(bytes: Vec<u8>) -> Result<Tree, Error> {
     if let Err(error) = std::str::from_utf8(&bytes) {
         return Err(Error(error.to_string()));
     }
+    Ok(bytes)
+}
+
+/// Content detection: JSONL iff non-whitespace content follows the first
+/// newline AND the first line is exactly one complete JSON value. Pretty
+/// JSON's first line is incomplete; a minified document has nothing after its
+/// only newline; the genuinely ambiguous single-record case reads as JSON,
+/// which `--jsonl` overrides.
+fn detect_jsonl(bytes: &[u8]) -> bool {
+    let Some(start) = bytes
+        .iter()
+        .position(|b| !matches!(b, b' ' | b'\t' | b'\n' | b'\r'))
+    else {
+        return false;
+    };
+    let content = &bytes[start..];
+    let Some(newline) = content.iter().position(|&b| b == b'\n') else {
+        return false;
+    };
+    let (first_line, rest) = content.split_at(newline);
+    if rest
+        .iter()
+        .all(|b| matches!(b, b' ' | b'\t' | b'\n' | b'\r'))
+    {
+        return false;
+    }
+    is_complete_value(first_line)
+}
+
+/// Whether `bytes` holds exactly one complete JSON value (plus whitespace).
+fn is_complete_value(bytes: &[u8]) -> bool {
+    let mut throwaway = Tree::new();
+    let mut scanner = Scanner::new(bytes);
+    if scanner
+        .scan_value(&mut throwaway, None, JsonKey::Root)
+        .is_err()
+    {
+        return false;
+    }
+    scanner.skip_ws();
+    scanner.pos == bytes.len()
+}
+
+fn json_from_bytes(bytes: Vec<u8>) -> Result<Tree, Error> {
     let mut tree = Tree::new();
     let mut scanner = Scanner::new(&bytes);
     scan_document(&mut scanner, &mut tree)?;
@@ -60,6 +119,65 @@ fn from_bytes(bytes: Vec<u8>) -> Result<Tree, Error> {
     }
     tree.set_json_source(bytes);
     Ok(tree)
+}
+
+/// Build the JSONL tree: a virtual array root over one record per non-blank
+/// line. Indices are record ordinals, not line numbers (error messages carry
+/// line numbers). A final record that fails to scan — the classic truncated
+/// tail — is dropped; a malformed record anywhere else fails the load.
+fn jsonl_from_bytes(bytes: Vec<u8>) -> Result<Tree, Error> {
+    let mut tree = Tree::new();
+    let root = tree.push_json(None, 0..bytes.len() as u32, JsonKey::JsonlRoot, true);
+    let lines = non_blank_lines(&bytes);
+    for (ordinal, line) in lines.iter().enumerate() {
+        let mark = tree.len();
+        // Bound the scanner to the record's line so inter-token whitespace
+        // cannot swallow the next line's bytes.
+        let mut scanner = Scanner::new(&bytes[..line.end]);
+        scanner.pos = line.start;
+        let scanned = scanner
+            .scan_value(&mut tree, Some(root), JsonKey::Index(ordinal as u32))
+            .and_then(|_| {
+                scanner.skip_ws();
+                if scanner.pos == line.end {
+                    Ok(())
+                } else {
+                    Err(scanner.syntax_error("trailing characters"))
+                }
+            });
+        if let Err(error) = scanned {
+            if ordinal == lines.len() - 1 {
+                tree.truncate(mark);
+            } else {
+                return Err(error);
+            }
+        }
+    }
+    tree.set_json_source(bytes);
+    Ok(tree)
+}
+
+/// Byte ranges of the lines holding non-whitespace content, in order.
+fn non_blank_lines(bytes: &[u8]) -> Vec<Range<usize>> {
+    let mut lines = Vec::new();
+    let mut start = 0;
+    for (position, &byte) in bytes.iter().enumerate() {
+        if byte == b'\n' {
+            push_if_non_blank(bytes, start..position, &mut lines);
+            start = position + 1;
+        }
+    }
+    push_if_non_blank(bytes, start..bytes.len(), &mut lines);
+    lines
+}
+
+fn push_if_non_blank(bytes: &[u8], range: Range<usize>, lines: &mut Vec<Range<usize>>) {
+    if bytes[range.clone()]
+        .iter()
+        .any(|b| !matches!(b, b' ' | b'\t' | b'\r'))
+    {
+        lines.push(range);
+    }
 }
 
 /// Scan the document, pushing nodes. A non-empty top-level object spreads its
@@ -621,6 +739,91 @@ mod tests {
             names(&tree, tree.children_of(root)),
             ["[0]: 1000.0", "[1]: 0.5", "[2]: -0.0"]
         );
+    }
+
+    #[test]
+    fn jsonl_content_is_detected_and_presents_as_a_virtual_array() {
+        let tree = parse("{\"a\": 1}\n{\"a\": 2}\n");
+        let root = tree.root_ids()[0];
+
+        assert_eq!(names(&tree, tree.root_ids()), ["$ [2]"]);
+        assert!(tree.is_container(root));
+        assert_eq!(names(&tree, tree.children_of(root)), ["[0] {1}", "[1] {1}"]);
+    }
+
+    #[test]
+    fn jsonl_detection_accepts_scalar_records() {
+        // Valid JSONL, invalid JSON — two number records.
+        let tree = parse("1\n2\n");
+        let root = tree.root_ids()[0];
+        assert_eq!(names(&tree, tree.root_ids()), ["$ [2]"]);
+        assert_eq!(names(&tree, tree.children_of(root)), ["[0]: 1", "[1]: 2"]);
+    }
+
+    #[test]
+    fn a_single_record_with_trailing_newline_stays_json() {
+        // Simultaneously valid JSON and one-record JSONL; detection picks
+        // JSON, and --jsonl exists to force the other reading.
+        let tree = parse("{\"a\": 1}\n");
+        assert_eq!(names(&tree, tree.root_ids()), ["a: 1"]);
+    }
+
+    #[test]
+    fn pretty_printed_json_is_not_mistaken_for_jsonl() {
+        let tree = parse("{\n  \"a\": 1,\n  \"b\": 2\n}\n");
+        assert_eq!(names(&tree, tree.root_ids()), ["a: 1", "b: 2"]);
+    }
+
+    #[test]
+    fn jsonl_skips_blank_lines_and_indices_are_record_ordinals() {
+        let tree = parse("1\n\n  \n2\n");
+        let root = tree.root_ids()[0];
+        assert_eq!(names(&tree, tree.root_ids()), ["$ [2]"]);
+        assert_eq!(names(&tree, tree.children_of(root)), ["[0]: 1", "[1]: 2"]);
+    }
+
+    #[test]
+    fn jsonl_drops_a_truncated_final_record() {
+        let tree = parse("{\"a\": 1}\n{\"b\": tru");
+        let root = tree.root_ids()[0];
+        assert_eq!(names(&tree, tree.root_ids()), ["$ [1]"]);
+        assert_eq!(names(&tree, tree.children_of(root)), ["[0] {1}"]);
+    }
+
+    #[test]
+    fn jsonl_fails_loudly_on_a_malformed_middle_record() {
+        let error = from_reader("{\"a\": 1}\nxxx\n{\"b\": 2}\n".as_bytes()).unwrap_err();
+        assert!(error.to_string().starts_with("invalid JSON input:"));
+    }
+
+    #[test]
+    fn jsonl_nodes_carry_global_and_record_relative_addresses() {
+        let tree = parse("{\"user\": {\"name\": \"Ada\"}}\n{\"user\": {\"name\": \"Bo\"}}\n");
+        let root = tree.root_ids()[0];
+        let record = tree.children_of(root)[1];
+        let user = tree.children_of(record)[0];
+        let name = tree.children_of(user)[0];
+
+        assert_eq!(tree.path(root), OsStr::new(""));
+        assert_eq!(tree.path(record), OsStr::new("/1"));
+        assert_eq!(tree.relpath(record), OsStr::new(""));
+        assert_eq!(tree.output(record), OsStr::new("/1"));
+        assert_eq!(
+            tree.alternate_output(record),
+            OsStr::new(r#"{"user":{"name":"Bo"}}"#)
+        );
+        assert_eq!(tree.path(name), OsStr::new("/1/user/name"));
+        assert_eq!(tree.relpath(name), OsStr::new("/user/name"));
+        assert_eq!(tree.jump_key(name), "/1/user/name");
+        assert_eq!(tree.jump_key(record), "/1");
+    }
+
+    #[test]
+    fn forced_jsonl_reads_a_single_record_as_one_element() {
+        let tree = jsonl_from_reader("{\"a\": 1}\n".as_bytes()).unwrap();
+        let root = tree.root_ids()[0];
+        assert_eq!(names(&tree, tree.root_ids()), ["$ [1]"]);
+        assert_eq!(names(&tree, tree.children_of(root)), ["[0] {1}"]);
     }
 
     #[test]

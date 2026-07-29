@@ -3,7 +3,10 @@
 A TUI for navigating a tree (by default, the file tree of a directory) and
 running actions on the focused node. `--json <PATH>` selects a JSON document
 instead; piped stdin (or `--json -`) reads the document from the pipe,
-`fzf`-style. The default action prints the node's source-specific value to
+`fzf`-style. JSONL input is detected from the content (first line is a
+complete JSON value and more content follows) and presents as a virtual
+array of records; `--jsonl <PATH|->` forces that reading for ambiguous
+content. The default action prints the node's source-specific value to
 stdout and exits. The TUI renders on **stderr** so stdout can be piped.
 
 ## Commands
@@ -44,27 +47,39 @@ stdout and exits. The TUI renders on **stderr** so stdout can be piped.
 - `src/config.rs` — TOML config: keybinding tables (`sh`/`cmd` + `exit`/`bg`
   flags) and `AppCommand` names. TOML bare keys can't contain `+`, so table
   headers like `[ctrl+e]` are preprocessed into quoted keys before parsing.
-- `src/cli.rs` — clap CLI: mutually exclusive `[PATH]` and `-j/--json <PATH>`
-  (`-` for stdin), `-I/--no-ignore`, `-e/--expand <N|all>`, repeatable
-  `-c/--config` (suppresses the user config at
-  `$XDG_CONFIG_HOME/ite/config.toml`).
+- `src/cli.rs` — clap CLI: mutually exclusive `[PATH]`, `-j/--json <PATH>`,
+  and `-l/--jsonl <PATH>` (`-` for stdin), `-I/--no-ignore`,
+  `-e/--expand <N|all>`, repeatable `-c/--config` (suppresses the user config
+  at `$XDG_CONFIG_HOME/ite/config.toml`).
 - `src/tree.rs` — source-neutral flat node arena implementing
-  `tui_treelistview::TreeModel` (Id = `usize`). Nodes carry only display,
-  hierarchy, container styling, default/alternate stdout, and shell-action
-  values. The app and UI consume this type and know nothing about input
-  formats.
+  `tui_treelistview::TreeModel` (Id = `usize`). Consumers read nodes only
+  through accessor methods (`name`, `detail`, `output`, `path`, `relpath`,
+  `jump_key`, …) which return owned values; the stored representation is a
+  private per-source `Payload` (fs: raw basename; JSON: byte span + key;
+  `Explicit` for tests) plus per-tree context (fs scan root / retained JSON
+  bytes), and everything else is derived on demand. `relpath` is relative to
+  the source's natural unit (scan root / document / JSONL record);
+  `jump_key` is always the document-global address. The app and UI consume
+  the accessors and know nothing about input formats.
 - `src/fstree.rs` — eager filesystem transform via `ignore::WalkBuilder`.
   Top-level entries are forest roots; siblings are directories-first and
   case-insensitively sorted. Empty directories are leaves; alternate output is
-  the basename.
-- `src/json_tree.rs` — the complete JSON boundary: parses one JSON value and
-  transforms it into `Tree`. Object members retain input order, arrays use
-  indexed children, default output and action paths are canonical JSON
-  Pointers, and alternate output is compact JSON. No JSON values escape this
-  module.
-- `src/app.rs` — `App`: keymap resolution (defaults + user overrides; `?` is
-  reserved for the keybinding panel) and `AppCommand` execution against
-  `TreeListViewState`. Returns `Effect` (`Quit` / `PrintAndExit` /
+  the basename. Nodes store only the raw file name; paths are derived by
+  ancestor-join from the canonicalized scan root.
+- `src/json_tree.rs` — the complete JSON boundary: reads the input to the
+  end, detects JSON vs JSONL from the content, and structurally scans byte
+  spans into the retained bytes (no serde DOM is kept; serde parses only
+  scalars/keys during derivation). Object members retain input order (and
+  duplicate keys), arrays use indexed children, default output and `$path`
+  are canonical JSON Pointers, `$relpath` is the within-record pointer for
+  JSONL, and alternate output is compact JSON re-serialized from the span.
+  JSONL: one record per non-blank line under a virtual array root, indices
+  are record ordinals, a malformed record fails the load except a truncated
+  final record, which is dropped. The derivation helpers at the bottom are
+  what `Tree`'s accessors call; no JSON values escape this module.
+- `src/app.rs` — `App`: keymap resolution (defaults + user overrides, `gg`
+  chord; `?` is reserved for the keybinding panel) and `AppCommand` execution
+  against `TreeListViewState`. Returns `Effect` (`Quit` / `PrintAndExit` /
   `RunShell`); no I/O here. Holds a `Mode` (`Normal` / `Jump`); a modal picker
   takes over key handling in `handle_key` until it closes.
 - `src/keybindings.rs` — the keybinding panel: the reserved `?`/`esc` key
@@ -76,7 +91,7 @@ stdout and exits. The TUI renders on **stderr** so stdout can be piped.
   a palette the body falls back to reverse video while the border stays blue
   (reversing it would move the blue onto the background).
 - `src/jump.rs` — the `/` jump picker (`AppCommand::Jump`): a pure state
-  machine that fuzzy-matches every node's `relpath` with `nucleo-matcher` and
+  machine that fuzzy-matches every node's `jump_key` with `nucleo-matcher` and
   returns `Accept`/`Cancel`/`Stay`. Accept drives `select_by_id` to move focus
   and expand ancestors. The query line is a `tui_input::Input`: non-navigation
   keys are repackaged as crossterm events and passed to tui-input's own
@@ -105,8 +120,9 @@ stdout and exits. The TUI renders on **stderr** so stdout can be piped.
 - `src/profile.rs` — span profiler (`Registry`, `Stats`), gated on
   `ITE_PROFILE`; the driver example reuses its `Stats`/formatting.
 - `src/main.rs` — chooses the tree source (`choose_source`: an explicit
-  `--json` file or `-`, a positional directory, else piped stdin means JSON
-  and a tty stdin means `.`); owns terminal lifecycle (raw mode + alt screen
+  `--json`/`--jsonl` file or `-`, a positional directory, else piped stdin
+  means JSON-family with content detection and a tty stdin means `.`); owns
+  terminal lifecycle (raw mode + alt screen
   on stderr, best-effort kitty keyboard enhancement for `ctrl+enter`/
   `shift+arrow`), event loop, effect execution. Exit codes: 0 selection, 130
   quit, foreground `exit` bindings propagate the command's status.

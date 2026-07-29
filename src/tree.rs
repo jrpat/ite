@@ -61,6 +61,8 @@ struct Explicit {
 pub(crate) enum JsonKey {
     /// The synthetic `$` root of a single-rooted document.
     Root,
+    /// The synthetic root of a JSONL document: the virtual array of records.
+    JsonlRoot,
     /// An object member; the span covers the raw key token, quotes included.
     Member { key_span: Range<u32> },
     /// An array element.
@@ -186,6 +188,16 @@ impl Tree {
         self.json_source = Some(bytes);
     }
 
+    /// Drop every node with id >= `len` (discarding a partially scanned JSONL
+    /// record); nodes below `len` and their order are untouched.
+    pub(crate) fn truncate(&mut self, len: usize) {
+        self.nodes.truncate(len);
+        self.roots.retain(|&id| id < len);
+        for node in &mut self.nodes {
+            node.children.retain(|&id| id < len);
+        }
+    }
+
     fn json_bytes(&self) -> &[u8] {
         self.json_source.as_deref().unwrap_or(&[])
     }
@@ -220,17 +232,21 @@ impl Tree {
             Payload::Json { span, key } => {
                 let bytes = self.json_bytes();
                 let prefix = match key {
-                    JsonKey::Root => "$".to_owned(),
+                    JsonKey::Root | JsonKey::JsonlRoot => "$".to_owned(),
                     JsonKey::Member { key_span } => crate::json_tree::key_text(bytes, key_span),
                     JsonKey::Index(index) => format!("[{index}]"),
                 };
                 if node.is_container {
                     let count = node.children.len();
-                    match (bytes[span.start as usize], count) {
-                        (b'{', 0) => format!("{prefix} {{}}"),
-                        (b'{', count) => format!("{prefix} {{{count}}}"),
-                        (_, 0) => format!("{prefix} []"),
-                        (_, count) => format!("{prefix} [{count}]"),
+                    // The JSONL root is a virtual array whatever its first
+                    // record's first byte happens to be.
+                    let object = !matches!(key, JsonKey::JsonlRoot)
+                        && bytes[span.start as usize] == b'{';
+                    match (object, count) {
+                        (true, 0) => format!("{prefix} {{}}"),
+                        (true, count) => format!("{prefix} {{{count}}}"),
+                        (false, 0) => format!("{prefix} []"),
+                        (false, count) => format!("{prefix} [{count}]"),
                     }
                 } else {
                     format!("{prefix}: {}", crate::json_tree::value_text(bytes, span))
@@ -289,7 +305,7 @@ impl Tree {
         match &self.node(id).payload {
             Payload::Explicit(explicit) => explicit.action.output.clone(),
             Payload::Fs { .. } => self.fs_path(id),
-            Payload::Json { .. } => self.json_pointer(id).into(),
+            Payload::Json { .. } => self.json_pointer_from(id, false).into(),
         }
     }
 
@@ -309,16 +325,18 @@ impl Tree {
         match &self.node(id).payload {
             Payload::Explicit(explicit) => explicit.action.path.clone(),
             Payload::Fs { .. } => self.fs_path(id),
-            Payload::Json { .. } => self.json_pointer(id).into(),
+            Payload::Json { .. } => self.json_pointer_from(id, false).into(),
         }
     }
 
-    /// Value exported to shell bindings as `$relpath`.
+    /// Value exported to shell bindings as `$relpath`: the address within the
+    /// source's natural unit — the scan root for directories, the document
+    /// for JSON, the containing record for JSONL (the record itself is "").
     pub fn relpath(&self, id: NodeId) -> OsString {
         match &self.node(id).payload {
             Payload::Explicit(explicit) => explicit.action.relpath.clone(),
             Payload::Fs { .. } => self.fs_relpath(id).into_os_string(),
-            Payload::Json { .. } => self.json_pointer(id).into(),
+            Payload::Json { .. } => self.json_pointer_from(id, true).into(),
         }
     }
 
@@ -327,7 +345,10 @@ impl Tree {
     /// and JSON documents; JSONL diverges, since a record-relative `relpath`
     /// repeats across records.
     pub fn jump_key(&self, id: NodeId) -> String {
-        self.relpath(id).to_string_lossy().into_owned()
+        match &self.node(id).payload {
+            Payload::Json { .. } => self.json_pointer_from(id, false),
+            _ => self.relpath(id).to_string_lossy().into_owned(),
+        }
     }
 
     /// Root-relative path of a filesystem node: ancestor file names joined.
@@ -351,21 +372,27 @@ impl Tree {
     }
 
     /// Canonical JSON Pointer of a JSON node, assembled from its ancestor
-    /// keys. The synthetic `$` root contributes no token, so a single-rooted
-    /// document's root is the empty (whole-document) pointer.
-    fn json_pointer(&self, id: NodeId) -> String {
+    /// keys. Synthetic roots contribute no token, so a single-rooted
+    /// document's root is the empty (whole-document) pointer. With
+    /// `within_record` the walk stops at the containing JSONL record, whose
+    /// own token is excluded — the record-relative address.
+    fn json_pointer_from(&self, id: NodeId, within_record: bool) -> String {
         let mut tokens = Vec::new();
         let mut cursor = Some(id);
         while let Some(current) = cursor {
             let node = self.node(current);
-            if let Payload::Json { key, .. } = &node.payload {
-                match key {
-                    JsonKey::Root => {}
-                    JsonKey::Member { key_span } => {
-                        tokens.push(crate::json_tree::key_text(self.json_bytes(), key_span));
-                    }
-                    JsonKey::Index(index) => tokens.push(index.to_string()),
+            let Payload::Json { key, .. } = &node.payload else {
+                break;
+            };
+            if within_record && self.is_jsonl_record(current) {
+                break;
+            }
+            match key {
+                JsonKey::Root | JsonKey::JsonlRoot => {}
+                JsonKey::Member { key_span } => {
+                    tokens.push(crate::json_tree::key_text(self.json_bytes(), key_span));
                 }
+                JsonKey::Index(index) => tokens.push(index.to_string()),
             }
             cursor = node.parent;
         }
@@ -374,6 +401,20 @@ impl Tree {
             pointer = crate::json_tree::append_pointer(&pointer, token);
         }
         pointer
+    }
+
+    /// Whether the node is a JSONL record: a direct child of the virtual
+    /// array root.
+    fn is_jsonl_record(&self, id: NodeId) -> bool {
+        self.node(id).parent.is_some_and(|parent| {
+            matches!(
+                &self.node(parent).payload,
+                Payload::Json {
+                    key: JsonKey::JsonlRoot,
+                    ..
+                }
+            )
+        })
     }
 
     pub fn len(&self) -> usize {
