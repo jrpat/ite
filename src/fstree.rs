@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::tree::{ActionValues, NodeId, Tree};
+use crate::tree::{NodeId, Tree};
 
 /// Scan `dir`, honoring ignore files unless `no_ignore` is set.
 ///
@@ -10,7 +10,7 @@ use crate::tree::{ActionValues, NodeId, Tree};
 pub fn scan(dir: &Path, no_ignore: bool) -> std::io::Result<Tree> {
     let _span = crate::profile::span("fstree::scan");
     let root_dir = dir.canonicalize()?;
-    let mut tree = Tree::new();
+    let mut tree = Tree::new_fs(root_dir.clone());
     let mut ids_by_path: std::collections::HashMap<PathBuf, NodeId> =
         std::collections::HashMap::new();
 
@@ -27,10 +27,7 @@ pub fn scan(dir: &Path, no_ignore: bool) -> std::io::Result<Tree> {
         let path = entry.path().to_path_buf();
         let is_dir = entry.file_type().is_some_and(|t| t.is_dir());
         let parent = path.parent().and_then(|p| ids_by_path.get(p)).copied();
-        let relpath = path.strip_prefix(&root_dir).unwrap_or(&path);
-        let action = ActionValues::new(path.as_os_str(), path.as_os_str(), relpath.as_os_str())
-            .with_alternate_output(entry.file_name());
-        let id = tree.push(parent, entry.file_name().to_string_lossy(), is_dir, action);
+        let id = tree.push_fs(parent, entry.file_name(), is_dir);
         if is_dir {
             ids_by_path.insert(path, id);
         }

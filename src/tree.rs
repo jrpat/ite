@@ -7,6 +7,7 @@
 //! the source on demand instead of holding them.
 
 use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 
 use tui_treelistview::{TreeChildren, TreeModel, TreeRevision};
 
@@ -46,15 +47,33 @@ impl ActionValues {
     }
 }
 
+/// Display and action values stored verbatim.
 #[derive(Debug)]
-struct Node {
+struct Explicit {
     name: String,
     detail: Option<String>,
+    action: ActionValues,
+}
+
+/// Per-node data that differs by source.
+#[derive(Debug)]
+enum Payload {
+    /// Stored verbatim (JSON documents, tests). Boxed so the variant does not
+    /// inflate every filesystem node.
+    Explicit(Box<Explicit>),
+    /// A filesystem entry's final path component. Kept as raw `OsString` so
+    /// non-UTF-8 names survive into the derived paths handed to shell
+    /// bindings; only the displayed name goes through `to_string_lossy`.
+    Fs { file_name: OsString },
+}
+
+#[derive(Debug)]
+struct Node {
     parent: Option<NodeId>,
     children: Vec<NodeId>,
     is_container: bool,
     depth: usize,
-    action: ActionValues,
+    payload: Payload,
 }
 
 #[derive(Debug, Default)]
@@ -63,11 +82,22 @@ pub struct Tree {
     roots: Vec<NodeId>,
     view_root: Option<NodeId>,
     revision: TreeRevision,
+    /// The scanned directory (canonicalized) filesystem paths derive from.
+    fs_root: Option<PathBuf>,
 }
 
 impl Tree {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A tree over a directory scan rooted at `root` (canonicalized);
+    /// filesystem nodes derive their paths from it.
+    pub(crate) fn new_fs(root: PathBuf) -> Self {
+        Self {
+            fs_root: Some(root),
+            ..Self::default()
+        }
     }
 
     pub fn push(
@@ -88,16 +118,42 @@ impl Tree {
         is_container: bool,
         action: ActionValues,
     ) -> NodeId {
+        self.push_node(
+            parent,
+            is_container,
+            Payload::Explicit(Box::new(Explicit {
+                name: name.into(),
+                detail,
+                action,
+            })),
+        )
+    }
+
+    /// Append a filesystem entry; its action values are derived on demand.
+    pub(crate) fn push_fs(
+        &mut self,
+        parent: Option<NodeId>,
+        file_name: impl Into<OsString>,
+        is_container: bool,
+    ) -> NodeId {
+        self.push_node(
+            parent,
+            is_container,
+            Payload::Fs {
+                file_name: file_name.into(),
+            },
+        )
+    }
+
+    fn push_node(&mut self, parent: Option<NodeId>, is_container: bool, payload: Payload) -> NodeId {
         let id = self.nodes.len();
         let depth = parent.map_or(0, |id| self.nodes[id].depth + 1);
         self.nodes.push(Node {
-            name: name.into(),
-            detail,
             parent,
             children: Vec::new(),
             is_container,
             depth,
-            action,
+            payload,
         });
         match parent {
             Some(parent) => self.nodes[parent].children.push(id),
@@ -112,12 +168,18 @@ impl Tree {
 
     /// The node's display name.
     pub fn name(&self, id: NodeId) -> String {
-        self.node(id).name.clone()
+        match &self.node(id).payload {
+            Payload::Explicit(explicit) => explicit.name.clone(),
+            Payload::Fs { file_name } => file_name.to_string_lossy().into_owned(),
+        }
     }
 
     /// Optional secondary text rendered after the name.
     pub fn detail(&self, id: NodeId) -> Option<String> {
-        self.node(id).detail.clone()
+        match &self.node(id).payload {
+            Payload::Explicit(explicit) => explicit.detail.clone(),
+            Payload::Fs { .. } => None,
+        }
     }
 
     pub fn parent(&self, id: NodeId) -> Option<NodeId> {
@@ -141,22 +203,34 @@ impl Tree {
 
     /// Text written to stdout when the node is accepted.
     pub fn output(&self, id: NodeId) -> OsString {
-        self.node(id).action.output.clone()
+        match &self.node(id).payload {
+            Payload::Explicit(explicit) => explicit.action.output.clone(),
+            Payload::Fs { .. } => self.fs_path(id),
+        }
     }
 
     /// Text written to stdout by the alternate accept action.
     pub fn alternate_output(&self, id: NodeId) -> OsString {
-        self.node(id).action.alternate_output.clone()
+        match &self.node(id).payload {
+            Payload::Explicit(explicit) => explicit.action.alternate_output.clone(),
+            Payload::Fs { file_name } => file_name.clone(),
+        }
     }
 
     /// Value exported to shell bindings as `$path`.
     pub fn path(&self, id: NodeId) -> OsString {
-        self.node(id).action.path.clone()
+        match &self.node(id).payload {
+            Payload::Explicit(explicit) => explicit.action.path.clone(),
+            Payload::Fs { .. } => self.fs_path(id),
+        }
     }
 
     /// Value exported to shell bindings as `$relpath`.
     pub fn relpath(&self, id: NodeId) -> OsString {
-        self.node(id).action.relpath.clone()
+        match &self.node(id).payload {
+            Payload::Explicit(explicit) => explicit.action.relpath.clone(),
+            Payload::Fs { .. } => self.fs_relpath(id).into_os_string(),
+        }
     }
 
     /// The text the jump picker matches and displays: the node's
@@ -164,7 +238,27 @@ impl Tree {
     /// and JSON documents; JSONL diverges, since a record-relative `relpath`
     /// repeats across records.
     pub fn jump_key(&self, id: NodeId) -> String {
-        self.node(id).action.relpath.to_string_lossy().into_owned()
+        self.relpath(id).to_string_lossy().into_owned()
+    }
+
+    /// Root-relative path of a filesystem node: ancestor file names joined.
+    fn fs_relpath(&self, id: NodeId) -> PathBuf {
+        let mut components = Vec::new();
+        let mut cursor = Some(id);
+        while let Some(current) = cursor {
+            let node = self.node(current);
+            if let Payload::Fs { file_name } = &node.payload {
+                components.push(file_name.as_os_str());
+            }
+            cursor = node.parent;
+        }
+        components.iter().rev().collect()
+    }
+
+    /// Absolute path of a filesystem node: the scan root plus [`Self::fs_relpath`].
+    fn fs_path(&self, id: NodeId) -> OsString {
+        let root = self.fs_root.as_deref().unwrap_or(Path::new(""));
+        root.join(self.fs_relpath(id)).into_os_string()
     }
 
     pub fn len(&self) -> usize {
@@ -321,6 +415,24 @@ mod tests {
         let (tree, dir, file, _) = sample();
         assert_eq!(tree.jump_key(dir), "dir");
         assert_eq!(tree.jump_key(file), "dir/file");
+    }
+
+    #[test]
+    fn fs_nodes_derive_action_values_from_the_hierarchy() {
+        let mut tree = Tree::new_fs("/scan/root".into());
+        let dir = tree.push_fs(None, "b-dir", true);
+        let file = tree.push_fs(Some(dir), "inner.txt", false);
+
+        assert_eq!(tree.name(file), "inner.txt");
+        assert_eq!(tree.detail(file), None);
+        assert_eq!(tree.path(dir), OsStr::new("/scan/root/b-dir"));
+        assert_eq!(tree.path(file), OsStr::new("/scan/root/b-dir/inner.txt"));
+        assert_eq!(tree.relpath(file), OsStr::new("b-dir/inner.txt"));
+        assert_eq!(tree.output(file), tree.path(file));
+        assert_eq!(tree.alternate_output(file), OsStr::new("inner.txt"));
+        assert_eq!(tree.jump_key(file), "b-dir/inner.txt");
+        assert!(tree.is_container(dir));
+        assert!(!tree.is_container(file));
     }
 
     #[test]
