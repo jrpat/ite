@@ -18,7 +18,8 @@ pub enum AppCommand {
     Collapse,
     /// Expand the focused non-leaf recursively.
     ExpandRecursively,
-    /// Collapse the focused non-leaf recursively.
+    /// Collapse the focused expanded branch recursively, or collapse its
+    /// parent recursively and focus it.
     CollapseRecursively,
     /// Enter semantics: expand a non-leaf, run the default action on a leaf.
     Select,

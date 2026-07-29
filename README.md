@@ -102,7 +102,7 @@ Navigation is vim-flavored:
 | `l` / `→` | Expand a collapsed container; on an expanded container, focus its first child |
 | `h` / `←` | Collapse an expanded container; otherwise focus its parent |
 | `L` / `shift+→` | Expand recursively |
-| `H` / `shift+←` | Collapse recursively |
+| `H` / `shift+←` | Collapse an expanded container recursively; otherwise collapse its parent recursively and focus it |
 | `enter` | Expand a collapsed container; on a leaf, print its path or JSON Pointer and exit |
 | `ctrl+enter` | Print the focused path or JSON Pointer and exit, container or not |
 | `alt+enter` | Print the focused basename or compact JSON value and exit |
