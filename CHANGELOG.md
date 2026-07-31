@@ -4,6 +4,47 @@ All notable changes to Ite will be documented in this file.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-31
+
+### Highlights
+
+- Explore JSON Lines from files or stdin through a virtual array, with automatic
+  content detection and `--jsonl` for ambiguous input.
+- Reach the first frame much sooner on large filesystem, JSON, and JSONL trees:
+  Ite now scans only the immediately visible structure, then fills in the rest
+  cooperatively while you browse.
+- Use substantially less memory on large trees by deriving filesystem paths and
+  JSON values on demand instead of storing repeated paths or a full JSON DOM.
+- Keep working through imperfect data: malformed JSONL records remain selectable,
+  unreadable directories are reported, and a truncated final JSONL record is
+  safely dropped.
+
+### All changes
+
+- Added JSONL input with content-based detection across files and stdin, plus
+  `-l`/`--jsonl <PATH|->` to force JSONL when a single-record input is ambiguous.
+- Presented JSONL as a virtual array with document-global paths for output and
+  fuzzy jump, alongside record-relative paths for configured actions.
+- Reduced filesystem-tree memory by storing each entry's basename once and
+  deriving absolute and relative paths from its ancestors.
+- Replaced the retained JSON DOM with a compact byte-span index over the original
+  input, deriving labels, previews, pointers, and selected output on demand.
+- Materialized JSON and JSONL containers lazily, with a cooperative background
+  indexer that prioritizes visible rows; opening fuzzy jump waits for indexing
+  with progress and can be cancelled.
+- Made directory scanning lazy as well: startup reads the root, while expansion
+  and the background sweep discover deeper levels without losing ancestor ignore
+  rules.
+- Surfaced malformed JSONL records as selectable warning nodes and unreadable
+  directories through the persistent error banner and exit report.
+- Rendered unloaded and empty containers consistently as collapsible branches,
+  avoiding startup glyph churn as indexing advances.
+- Compiled profiling instrumentation out of normal release binaries while
+  extending `cargo profile-tui` to measure JSON and JSONL startup, indexing,
+  expansion, and picker latency.
+- Improved the keybinding panel's readability with bold key labels and dimmed
+  descriptions using terminal palette colors.
+
 ## [0.1.1] - 2026-07-29
 
 ### Highlights
