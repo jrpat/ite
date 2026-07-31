@@ -8,13 +8,16 @@
 //! tree's error list (banner + stderr on exit) instead of being skipped
 //! silently.
 
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use crate::tree::{NodeId, Tree};
 
 /// Scan `dir`'s top level, honoring ignore files unless `no_ignore` is set.
 ///
-/// Dotfiles are always included. Deeper directories materialize on demand.
+/// Dotfiles are included. When ignore handling is enabled, repository metadata
+/// (`.git` and `.jj`) is excluded too. Deeper directories materialize on
+/// demand.
 pub fn scan(dir: &Path, no_ignore: bool) -> std::io::Result<Tree> {
     let _span = crate::profile::span("fstree::scan");
     let root_dir = dir.canonicalize()?;
@@ -48,12 +51,19 @@ fn walk_into(tree: &mut Tree, parent: Option<NodeId>, path: &Path, no_ignore: bo
                 if entry.depth() == 0 {
                     continue; // the walked directory itself
                 }
+                if !no_ignore && is_repository_metadata(entry.file_name()) {
+                    continue;
+                }
                 let is_dir = entry.file_type().is_some_and(|t| t.is_dir());
                 tree.push_fs(parent, entry.file_name(), is_dir);
             }
             Err(error) => tree.record_error(error.to_string()),
         }
     }
+}
+
+fn is_repository_metadata(name: &OsStr) -> bool {
+    name == OsStr::new(".git") || name == OsStr::new(".jj")
 }
 
 #[cfg(test)]
@@ -122,6 +132,45 @@ mod tests {
         let names = root_names(&tree);
         assert!(names.contains(&".hidden-file".to_string()));
         assert!(names.contains(&"ignored.log".to_string()));
+    }
+
+    #[test]
+    fn repository_metadata_directories_follow_the_ignore_setting() {
+        let dir = fixture();
+        std::fs::create_dir(dir.path().join(".git")).unwrap();
+        std::fs::create_dir(dir.path().join(".jj")).unwrap();
+        std::fs::create_dir(dir.path().join("b-dir/.git")).unwrap();
+        std::fs::create_dir(dir.path().join("b-dir/.jj")).unwrap();
+
+        for (no_ignore, expected) in [(false, false), (true, true)] {
+            let mut tree = scan(dir.path(), no_ignore).unwrap();
+            let names = root_names(&tree);
+            assert_eq!(names.contains(&".git".to_string()), expected, "{names:?}");
+            assert_eq!(names.contains(&".jj".to_string()), expected, "{names:?}");
+
+            let b_dir = tree
+                .root_ids()
+                .iter()
+                .copied()
+                .find(|&id| tree.name(id) == "b-dir")
+                .unwrap();
+            tree.ensure_children(b_dir);
+            let child_names: Vec<_> = tree
+                .children_of(b_dir)
+                .iter()
+                .map(|&id| tree.name(id))
+                .collect();
+            assert_eq!(
+                child_names.contains(&".git".to_string()),
+                expected,
+                "{child_names:?}"
+            );
+            assert_eq!(
+                child_names.contains(&".jj".to_string()),
+                expected,
+                "{child_names:?}"
+            );
+        }
     }
 
     #[test]
