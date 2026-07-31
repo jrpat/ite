@@ -4,6 +4,20 @@ All notable changes to Ite will be documented in this file.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-07-31
+
+### Highlights
+
+- Press `o` on a filesystem leaf to open it with your desktop's default
+  application while Ite keeps running.
+
+### All changes
+
+- Added the configurable `open` command, bound to `o` by default; it opens real
+  filesystem leaves with the platform's default handler, leaves containers and
+  JSON nodes alone, detaches launched applications, and reports launch failures
+  without ending the session.
+
 ## [0.2.0] - 2026-07-31
 
 ### Highlights
