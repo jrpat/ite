@@ -1,5 +1,10 @@
-//! Installs the release binary to `$XDG_BIN_HOME/ite` (default
-//! `~/.local/bin/ite`). Run via `cargo local-bin`.
+//! Local-install support program behind `cargo local-bin`. It release-builds
+//! the user-facing binary and copies it to `$XDG_BIN_HOME/ite` (defaulting to
+//! `~/.local/bin/ite`).
+//!
+//! Installation-path resolution and the final copy belong here rather than in
+//! the application binary; Cargo aliases cannot expand environment variables
+//! themselves.
 
 use std::path::PathBuf;
 use std::process::Command;

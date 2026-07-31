@@ -1,5 +1,5 @@
-//! The jump picker: a full-screen fuzzy finder over every node in the current
-//! tree view.
+//! Pure state machine for the `/` jump picker: a fuzzy finder over every node
+//! in the current tree.
 //!
 //! Pressing `/` opens a [`Jump`] over the current tree. Typing filters a flat,
 //! score-ranked list of candidate paths; accepting one asks the app to move
@@ -7,6 +7,7 @@
 //! no I/O and no rendering — it is a pure state machine, so it is unit-tested
 //! exactly like the rest of `app.rs`. Where it is drawn is the renderer's
 //! concern (see `ui::render_jump` and ADR-0002); the picker only exposes state.
+//! Query editing is delegated to `tui_input`; fuzzy ranking belongs here.
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};

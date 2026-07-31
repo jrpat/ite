@@ -1,4 +1,10 @@
-//! User configuration: TOML options plus keybinding tables.
+//! User-configuration boundary and application-command vocabulary. It loads
+//! and merges TOML files, parses keybinding tables into actions, and names the
+//! commands that `app` can execute.
+//!
+//! Key syntax is delegated to `keys`; shell execution remains in `runner`.
+//! Before TOML parsing, table headers such as `[ctrl+e]` are quoted because `+`
+//! is not valid in a TOML bare key.
 
 use std::collections::HashMap;
 use std::path::PathBuf;

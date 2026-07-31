@@ -1,4 +1,10 @@
-//! Executes `sh` keybindings with `$path` / `$relpath` in the environment.
+//! Subprocess boundary for configured shell bindings. The executable calls
+//! this module when `app` returns a shell effect; interaction policy remains in
+//! `app`, and terminal suspension/resumption remains in `main`.
+//!
+//! Commands run through `sh -c` with `$path` and `$relpath` exported. Background
+//! bindings detach from standard streams, while foreground bindings read from
+//! `/dev/tty` when ite itself consumed piped stdin.
 
 use std::ffi::OsStr;
 use std::io::IsTerminal;

@@ -1,7 +1,10 @@
-//! Internal modules shared by the `ite` binary and its test/support programs.
+//! Internal implementation crate shared by the `ite` binary, integration
+//! tests, and support programs. This is not a supported public library API.
 //!
-//! This crate is an implementation detail of the end-user application, not a
-//! supported library API.
+//! Source adapters (`fstree`, `json_tree`) produce the neutral `tree` model.
+//! `app` coordinates that model with `keys`, `config`, `jump`, and
+//! `keybindings`; `ui` renders the result. Process and terminal I/O stay at the
+//! binary boundary, with `runner` providing the shell-command subprocess edge.
 
 pub mod app;
 pub mod cli;

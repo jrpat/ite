@@ -1,4 +1,11 @@
-//! Application state: focus/expansion driven by app commands and keybindings.
+//! I/O-free interaction coordinator. `App` owns the tree-list state, effective
+//! keymap, expansion/focus behavior, modal jump picker, keybinding-panel state,
+//! and the execution of configured `AppCommand`s.
+//!
+//! Key handling mutates application state or returns an `Effect` for the
+//! executable to perform; this module neither draws nor touches the terminal,
+//! filesystem, stdout, or subprocesses. Modal state machines live in their own
+//! modules and are routed from here.
 
 use std::collections::HashMap;
 use std::ffi::OsString;

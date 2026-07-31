@@ -1,4 +1,10 @@
-//! Command-line interface.
+//! The declarative command-line surface: clap argument definitions and parsing
+//! for expansion policy, filesystem/JSON source selection, ignore behavior,
+//! and configuration paths.
+//!
+//! This module describes user input but performs no I/O and does not decide the
+//! implicit source. The executable interprets `Cli`, loads files/stdin, and
+//! passes the resulting settings into the application.
 
 use std::path::PathBuf;
 use std::str::FromStr;

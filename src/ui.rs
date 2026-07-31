@@ -1,6 +1,14 @@
-//! Rendering: a single-column tree list, plus the jump picker and keybinding
-//! panel drawn over it. Colors stay inside the terminal's ANSI palette apart
-//! from the terminal-derived focus blend ([`Palette::focus_bg`]).
+//! Ratatui rendering for the tree and its modal/auxiliary surfaces. This module
+//! turns `App`, `Jump`, and keybinding view-model state into buffer cells and
+//! records viewport geometry needed by paging and mouse routing; it owns no
+//! event loop or source data.
+//!
+//! Colors stay inside the terminal's ANSI palette except for the focus
+//! background derived from the terminal's own colors (`Palette::focus_bg`). The
+//! tree deliberately avoids horizontal scrolling and large flexible-column
+//! ideals, which would make the widget render a costly off-screen canvas. The
+//! custom vertical scrollbar repaints the widget's reserved gutter until the
+//! upstream style API can express the desired quiet, dithered bar.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;

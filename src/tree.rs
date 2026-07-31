@@ -1,10 +1,11 @@
-//! Source-neutral tree data consumed by the application and renderer.
+//! Source-neutral tree model at the center of the application. Filesystem and
+//! JSON adapters build its flat node arena; `app` navigates it and `ui` renders
+//! it through the `tui_treelistview::TreeModel` implementation.
 //!
-//! Consumers read nodes only through the accessor methods on [`Tree`]; the
-//! stored representation is private so it can be swapped for spans into
-//! retained input without touching the app, renderer, or picker. Accessors
-//! return owned values for the same reason: a future tree computes them from
-//! the source on demand instead of holding them.
+//! Consumers read nodes only through `Tree` accessors. The stored representation
+//! is private so source-specific payloads—including filesystem names and spans
+//! into retained JSON—can change without touching the app, renderer, or picker.
+//! Accessors return owned values because those values may be derived on demand.
 
 use std::ffi::OsString;
 use std::ops::Range;

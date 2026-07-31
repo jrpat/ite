@@ -1,3 +1,11 @@
+//! Repository-level contract tests for packaging and release infrastructure.
+//! They inspect manifests, generated workflows, packaged file lists, installed
+//! binary metadata, and the release skill without coupling product modules to
+//! repository layout.
+//!
+//! This is also the home for structural source-policy checks that apply across
+//! crates, examples, and tests rather than to one runtime module.
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -29,6 +37,40 @@ fn assert_contains(haystack: &str, needle: &str) {
     assert!(
         haystack.contains(needle),
         "expected text to contain {needle:?}"
+    );
+}
+
+fn rust_files_under(path: &Path, files: &mut Vec<PathBuf>) {
+    for entry in std::fs::read_dir(path).expect("source directory") {
+        let path = entry.expect("source entry").path();
+        if path.is_dir() {
+            rust_files_under(&path, files);
+        } else if path.extension().and_then(|extension| extension.to_str()) == Some("rs") {
+            files.push(path);
+        }
+    }
+}
+
+#[test]
+fn rust_files_begin_with_a_map_of_their_territory() {
+    let mut files = Vec::new();
+    for directory in ["src", "examples", "tests"] {
+        rust_files_under(&root().join(directory), &mut files);
+    }
+
+    let undocumented: Vec<_> = files
+        .iter()
+        .filter(|path| {
+            !std::fs::read_to_string(path)
+                .expect("Rust source")
+                .starts_with("//!")
+        })
+        .map(|path| path.strip_prefix(root()).expect("file under root"))
+        .collect();
+
+    assert!(
+        undocumented.is_empty(),
+        "Rust files without a module-level prelude: {undocumented:#?}"
     );
 }
 

@@ -1,4 +1,9 @@
-//! Key representation and parsing of config key strings like `ctrl+e`.
+//! Normalized keyboard vocabulary shared by configuration, the application,
+//! and modal pickers. It converts crossterm events and config spellings such as
+//! `ctrl+e` into the same compact `Key` value.
+//!
+//! Modifier normalization lives here so keymap consumers do not reproduce
+//! terminal-specific rules; notably, uppercase characters absorb Shift.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 

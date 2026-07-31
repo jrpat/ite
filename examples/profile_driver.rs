@@ -1,6 +1,10 @@
-//! Headless TUI profiler: runs the release `ite` binary in a real PTY,
-//! simulates keypresses, and reports round-trip latency per key plus the
-//! app's internal span profile (via ITE_PROFILE).
+//! Headless performance harness behind `cargo profile-tui`. It runs the release
+//! `ite` binary in a real PTY, answers terminal queries, simulates keypresses,
+//! and reports per-key round-trip latency alongside the app's internal span
+//! profile (via `ITE_PROFILE`).
+//!
+//! This lives outside the product binary so profiling exercises the actual
+//! terminal protocol and release executable rather than a synthetic renderer.
 //!
 //! Usage: cargo profile-tui [PATH] [ITERS]
 //!   PATH   directory or JSON/JSONL file to explore (default ".")

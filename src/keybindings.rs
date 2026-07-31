@@ -1,4 +1,11 @@
-//! Keybinding-panel entries, formatting, layout, and scroll state.
+//! View-model and interaction state for the keybinding reference panel. It
+//! turns the application's effective keymap into stable display entries, lays
+//! them out as a width-aware column grid, and tracks open/scroll/onscreen-area
+//! state for keyboard and mouse routing.
+//!
+//! Binding semantics stay in `config`/`app`; pixels and terminal styles stay in
+//! `ui`. The reserved `?` toggle and Escape close keys live here alongside the
+//! panel behavior they control.
 
 use std::borrow::Cow;
 use std::cmp::Ordering;

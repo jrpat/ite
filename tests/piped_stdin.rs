@@ -1,7 +1,11 @@
-//! End-to-end coverage for the `producer | ite` pattern: JSON arrives on a
-//! stdin pipe while the TUI drives the controlling terminal (the PTY
-//! harness lives in `tests/common`).
-#![cfg(unix)]
+//! End-to-end coverage for process/terminal behavior that unit tests cannot
+//! model. These tests run the real binary in a PTY while independently piping
+//! JSON into stdin or redirecting stdout.
+//!
+//! The shared harness in `tests/common` acts like a small terminal emulator: it
+//! captures screen traffic, answers terminal queries, and sends keys so these
+//! tests can verify that output and foreground bindings use the correct stream
+//! or controlling terminal.
 
 mod common;
 

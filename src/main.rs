@@ -1,3 +1,13 @@
+//! Executable boundary for `ite`: loads CLI/configuration, chooses and reads an
+//! input source, owns the terminal lifecycle and event loop, and performs the
+//! effects returned by the otherwise I/O-free application state.
+//!
+//! The TUI renders on stderr while selections remain clean on stdout. When
+//! stdin or stdout is piped, this module also preserves access to the
+//! controlling terminal, including around foreground shell bindings. Source
+//! transformations belong in `fstree`/`json_tree`; interaction and rendering
+//! policy belong in `app`/`ui`.
+
 use std::ffi::OsString;
 use std::io::{IsTerminal, Write, stderr};
 use std::path::PathBuf;
