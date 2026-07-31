@@ -53,8 +53,10 @@ pub struct App {
     /// The current input mode; see [`Mode`].
     pub mode: Mode,
     keymap: HashMap<Key, Binding>,
-    /// Panel rows derived from the effective keymap, built once at startup.
+    /// User entries followed by non-overridden built-ins, built once at startup.
     pub(crate) panel_entries: Vec<KeybindingEntry>,
+    /// The leading entries that came from configuration rather than defaults.
+    pub(crate) panel_user_entry_count: usize,
     pub keybinding_panel: KeybindingPanelState,
     /// Temporary view roots, from the original forest to the current subtree.
     root_history: Vec<Option<NodeId>>,
@@ -66,17 +68,25 @@ pub struct App {
 
 impl App {
     pub fn new(tree: Tree, config: &Config, expand: Option<ExpandSpec>) -> Self {
-        let mut keymap = Self::default_keymap();
+        let mut builtin_keymap = Self::default_keymap();
         // `?` is reserved for the panel toggle: a configured `[?]` table is
         // accepted but silently ignored.
-        keymap.extend(
-            config
-                .bindings
-                .iter()
-                .filter(|&(&key, _)| key != TOGGLE_KEY)
-                .map(|(&key, binding)| (key, binding.clone())),
-        );
-        let panel_entries = build_entries(&keymap);
+        let user_keymap: HashMap<_, _> = config
+            .bindings
+            .iter()
+            .filter(|&(&key, _)| key != TOGGLE_KEY)
+            .map(|(&key, binding)| (key, binding.clone()))
+            .collect();
+        for key in user_keymap.keys() {
+            builtin_keymap.remove(key);
+        }
+
+        let mut panel_entries = build_entries(&user_keymap);
+        let panel_user_entry_count = panel_entries.len();
+        panel_entries.extend(build_entries(&builtin_keymap));
+
+        let mut keymap = builtin_keymap;
+        keymap.extend(user_keymap);
         let mut app = Self {
             tree,
             state: TreeListViewState::with_capacity(0),
@@ -84,6 +94,7 @@ impl App {
             mode: Mode::Normal,
             keymap,
             panel_entries,
+            panel_user_entry_count,
             keybinding_panel: KeybindingPanelState::default(),
             root_history: Vec::new(),
             page_height: 20,
@@ -1088,6 +1099,7 @@ mod tests {
     #[test]
     fn jump_owns_question_mark_and_escape_without_dismissing_the_panel() {
         let (_d, mut app) = app();
+        while app.do_work() {}
         app.handle_key(Key::parse("?").unwrap());
         app.handle_key(Key::parse("/").unwrap());
         app.handle_key(Key::parse("?").unwrap());

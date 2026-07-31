@@ -238,12 +238,41 @@ pub fn truncate_with_ellipsis(text: &str, max_width: usize) -> Cow<'_, str> {
 }
 
 pub fn build_grid(entries: &[KeybindingEntry], available_width: usize) -> KeybindingGrid {
-    if entries.is_empty() {
+    let section = 0..entries.len();
+    build_grid_for_sections(entries, std::slice::from_ref(&section), available_width)
+}
+
+/// Lay out user entries first, followed by a blank row that the UI renders as
+/// a separator, then the remaining built-in entries.
+pub fn build_sectioned_grid(
+    entries: &[KeybindingEntry],
+    user_entry_count: usize,
+    available_width: usize,
+) -> KeybindingGrid {
+    let user_entry_count = user_entry_count.min(entries.len());
+    if user_entry_count == 0 || user_entry_count == entries.len() {
+        return build_grid(entries, available_width);
+    }
+
+    build_grid_for_sections(
+        entries,
+        &[0..user_entry_count, user_entry_count..entries.len()],
+        available_width,
+    )
+}
+
+fn build_grid_for_sections(
+    entries: &[KeybindingEntry],
+    sections: &[std::ops::Range<usize>],
+    available_width: usize,
+) -> KeybindingGrid {
+    let largest_section = sections.iter().map(std::ops::Range::len).max().unwrap_or(0);
+    if largest_section == 0 {
         return KeybindingGrid::default();
     }
 
     let max_columns = ((available_width + GRID_GAP) / (MIN_COLUMN_WIDTH + GRID_GAP)).max(1);
-    let column_count = entries.len().min(max_columns);
+    let column_count = largest_section.min(max_columns);
     let gaps = GRID_GAP * (column_count - 1);
     let column_width = available_width.saturating_sub(gaps) / column_count;
     let key_width = entries
@@ -253,10 +282,18 @@ pub fn build_grid(entries: &[KeybindingEntry], available_width: usize) -> Keybin
         .unwrap_or(0)
         .min(MAX_KEY_WIDTH)
         .min(column_width);
-    let row_count = entries.len().div_ceil(column_count);
-    let mut rows = vec![Vec::new(); row_count];
-    for index in 0..entries.len() {
-        rows[index % row_count].push(index);
+    let mut rows = Vec::new();
+    for (section_index, section) in sections.iter().enumerate() {
+        if section_index > 0 {
+            rows.push(Vec::new());
+        }
+        let section_columns = section.len().min(column_count);
+        let row_count = section.len().div_ceil(section_columns);
+        let first_row = rows.len();
+        rows.resize_with(first_row + row_count, Vec::new);
+        for (offset, entry_index) in section.clone().enumerate() {
+            rows[first_row + offset % row_count].push(entry_index);
+        }
     }
 
     KeybindingGrid {

@@ -116,13 +116,13 @@ stdout and exits. The TUI renders on **stderr** so stdout can be piped.
   behind the same seam. Single-rooted trees open with their first level
   expanded.
 - `src/keybindings.rs` — the keybinding panel: the reserved `?`/`esc` key
-  constants, display entries derived once at startup from the effective keymap
-  (`build_entries`), the column-grid layout, and the panel's open/scroll/
-  recorded-area state (mouse-wheel routing tests against that area). `ui.rs`
-  docks it above the bottom edge, shrinks the tree viewport to fit, and fills
-  it with the terminal-derived focus blend inside an ANSI-blue border; without
-  a palette the body falls back to reverse video while the border stays blue
-  (reversing it would move the blue onto the background).
+  constants, display entries derived once at startup into user and
+  non-overridden built-in sections (`build_entries`), the sectioned column-grid
+  layout, and the panel's open/scroll/recorded-area state (mouse-wheel routing
+  tests against that area). `ui.rs` docks it above the bottom edge, separates
+  the two sections with a full-width ANSI-gray rule, shrinks the tree viewport
+  to fit, and renders it with the terminal's default background and foreground
+  border.
 - `src/jump.rs` — the `/` jump picker (`AppCommand::Jump`): a pure state
   machine that fuzzy-matches every node's `jump_key` with `nucleo-matcher` and
   returns `Accept`/`Cancel`/`Stay`. Accept drives `select_by_id` to move focus

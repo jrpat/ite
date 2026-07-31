@@ -16,7 +16,8 @@ use unicode_width::UnicodeWidthStr;
 use crate::app::{App, Mode};
 use crate::jump::Jump;
 use crate::keybindings::{
-    GRID_GAP, KeybindingEntry, KeybindingGrid, MAX_PANEL_ROWS, build_grid, truncate_with_ellipsis,
+    GRID_GAP, KeybindingEntry, KeybindingGrid, MAX_PANEL_ROWS, build_sectioned_grid,
+    truncate_with_ellipsis,
 };
 use crate::tree::{NodeId, Tree};
 
@@ -211,7 +212,11 @@ struct PanelLayout {
     overflow: bool,
 }
 
-fn keybinding_panel_layout(entries: &[KeybindingEntry], screen: Rect) -> PanelLayout {
+fn keybinding_panel_layout(
+    entries: &[KeybindingEntry],
+    user_entry_count: usize,
+    screen: Rect,
+) -> PanelLayout {
     let width_without_chrome = |scrollbar: bool| {
         usize::from(screen.width)
             .saturating_sub(2) // the Block border
@@ -219,11 +224,11 @@ fn keybinding_panel_layout(entries: &[KeybindingEntry], screen: Rect) -> PanelLa
             .saturating_sub(usize::from(scrollbar))
     };
     let max_body_rows = usize::from(screen.height / 2).min(MAX_PANEL_ROWS);
-    let mut grid = build_grid(entries, width_without_chrome(false));
+    let mut grid = build_sectioned_grid(entries, user_entry_count, width_without_chrome(false));
     let mut viewport_rows = grid.rows.len().min(max_body_rows);
     let mut overflow = grid.rows.len() > viewport_rows;
     if overflow {
-        grid = build_grid(entries, width_without_chrome(true));
+        grid = build_sectioned_grid(entries, user_entry_count, width_without_chrome(true));
         viewport_rows = grid.rows.len().min(max_body_rows);
         overflow = grid.rows.len() > viewport_rows;
     }
@@ -252,21 +257,14 @@ fn keybinding_panel_layout(entries: &[KeybindingEntry], screen: Rect) -> PanelLa
 
 fn render_keybinding_panel(app: &mut App, layout: &PanelLayout, buf: &mut Buffer) {
     let entries = &app.panel_entries;
-    // Reverse video is the palette-less fallback for the panel body, but not
-    // for its ANSI-blue border: reversing the border would turn blue into its
-    // background instead of its foreground.
-    let block_style = app
-        .palette
-        .map(|palette| focus_style(Some(palette)))
-        .unwrap_or_default();
+    let block_style = Style::default()
+        .bg(Color::Reset)
+        .remove_modifier(Modifier::REVERSED);
     let block = Block::bordered()
         .style(block_style)
-        .border_style(Style::default().fg(Color::Blue));
+        .border_style(Style::default().fg(Color::Reset));
     let inner = block.inner(layout.area);
     block.render(layout.area, buf);
-    if app.palette.is_none() {
-        buf.set_style(inner, focus_style(None));
-    }
     let viewport_rows = usize::from(layout.content.height);
     app.keybinding_panel
         .record_layout(layout.area, layout.grid.rows.len(), viewport_rows);
@@ -277,12 +275,25 @@ fn render_keybinding_panel(app: &mut App, layout: &PanelLayout, buf: &mut Buffer
 
     let content = layout.content;
     let key_style = Style::default()
-        .fg(Color::Blue)
+        .fg(Color::Reset)
         .add_modifier(Modifier::BOLD);
+    let description_style = Style::default().fg(Color::DarkGray);
+    let separator_style = Style::default().fg(Color::DarkGray);
     let start = app.keybinding_panel.scroll();
     let end = (start + viewport_rows).min(layout.grid.rows.len());
     for (visible_row, row) in layout.grid.rows[start..end].iter().enumerate() {
         let y = content.y + visible_row as u16;
+        if row.is_empty() {
+            let separator_width = inner.width.saturating_sub(u16::from(layout.overflow));
+            buf.set_stringn(
+                inner.x,
+                y,
+                "─".repeat(usize::from(separator_width)),
+                usize::from(separator_width),
+                separator_style,
+            );
+            continue;
+        }
         for (column, &entry_index) in row.iter().enumerate() {
             let entry = &entries[entry_index];
             // Grid widths derive from the u16 screen width, so they fit u16.
@@ -313,7 +324,7 @@ fn render_keybinding_panel(app: &mut App, layout: &PanelLayout, buf: &mut Buffer
                     y,
                     truncate_with_ellipsis(&entry.description, description_width),
                     description_width,
-                    Style::default(),
+                    description_style,
                 );
             }
         }
@@ -354,7 +365,7 @@ pub fn draw(app: &mut App, area: Rect, buf: &mut Buffer) {
     let panel = app
         .keybinding_panel
         .is_open()
-        .then(|| keybinding_panel_layout(&app.panel_entries, area));
+        .then(|| keybinding_panel_layout(&app.panel_entries, app.panel_user_entry_count, area));
     let mut tree_area = match &panel {
         Some(layout) => Rect::new(
             area.x,
@@ -952,8 +963,8 @@ mod tests {
         assert_eq!(panel.y + panel.height, 24);
         assert_eq!(app.page_height, panel.y as usize);
         assert_eq!(buf[(panel.x, panel.y)].symbol(), "┌");
-        assert_eq!(buf[(panel.x, panel.y)].fg, Color::Blue);
-        assert_eq!(buf[(panel.x + 1, panel.y + 1)].bg, Color::Rgb(26, 26, 26));
+        assert_eq!(buf[(panel.x, panel.y)].fg, Color::Reset);
+        assert_eq!(buf[(panel.x + 1, panel.y + 1)].bg, Color::Reset);
         assert!(text.contains("Shortcuts"), "{text}");
         assert!(text.contains("Close"), "{text}");
         assert!(text.contains("First"), "{text}");
@@ -964,13 +975,93 @@ mod tests {
             "{text}"
         );
 
-        let blue_bold_key = (panel.y..panel.bottom()).any(|y| {
-            (panel.x..panel.right()).any(|x| {
-                let cell = &buf[(x, y)];
-                cell.fg == Color::Blue && cell.modifier.contains(Modifier::BOLD)
-            })
+        let layout = keybinding_panel_layout(
+            &app.panel_entries,
+            app.panel_user_entry_count,
+            Rect::new(0, 0, 80, 24),
+        );
+        let entry = &app.panel_entries[layout.grid.rows[0][0]];
+        let key_width = layout.grid.key_width;
+        let label_width = UnicodeWidthStr::width(entry.label.full.as_str());
+        let key = &buf[(
+            layout.content.x + (key_width - label_width) as u16,
+            layout.content.y,
+        )];
+        assert_eq!(
+            key.fg,
+            Color::Reset,
+            "key should use the default foreground"
+        );
+        assert!(key.modifier.contains(Modifier::BOLD), "key should be bold");
+
+        let description = &buf[(layout.content.x + key_width as u16 + 1, layout.content.y)];
+        assert_eq!(
+            description.fg,
+            Color::DarkGray,
+            "description should use ANSI 8"
+        );
+        assert!(
+            !description.modifier.contains(Modifier::BOLD),
+            "description should not be bold"
+        );
+    }
+
+    #[test]
+    fn user_keybindings_are_above_builtin_bindings_with_a_full_width_gray_rule() {
+        use crate::keys::Key;
+
+        let mut tree = Tree::new();
+        tree.push(None, "leaf", false, ActionValues::new("", "", ""));
+        let config = Config::parse(
+            r#"
+[j]
+cmd = "quit"
+help = "Custom quit"
+
+[x]
+sh = "printf custom"
+help = "Custom action"
+"#,
+        )
+        .unwrap();
+        let mut app = App::new(tree, &config, None);
+        let configured_j: Vec<_> = app
+            .panel_entries
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| entry.key == Key::parse("j").unwrap())
+            .collect();
+        assert_eq!(
+            configured_j.len(),
+            1,
+            "an override should not also be built in"
+        );
+        assert!(configured_j[0].0 < app.panel_user_entry_count);
+        app.palette = Some(Palette {
+            fg: (255, 255, 255),
+            bg: (0, 0, 0),
         });
-        assert!(blue_bold_key, "expected bold blue key labels:\n{text}");
+        app.handle_key(Key::parse("?").unwrap());
+
+        let (buf, text) = drawn(&mut app, 80, 30);
+        let panel = app.keybinding_panel.area().expect("panel area");
+        let separator_y = (panel.y + 1..panel.bottom() - 1)
+            .find(|&y| {
+                (panel.x + 1..panel.right() - 1).all(|x| {
+                    let cell = &buf[(x, y)];
+                    cell.symbol() == "─" && cell.fg == Color::DarkGray
+                })
+            })
+            .unwrap_or_else(|| panic!("missing full-width ANSI-8 separator:\n{text}"));
+        let row_containing = |needle: &str| {
+            text.lines()
+                .position(|line| line.contains(needle))
+                .unwrap_or_else(|| panic!("missing {needle:?} in:\n{text}")) as u16
+        };
+
+        assert!(row_containing("Custom quit") < separator_y, "{text}");
+        assert!(row_containing("Custom action") < separator_y, "{text}");
+        assert!(row_containing("Shortcuts") > separator_y, "{text}");
     }
 
     #[test]
@@ -999,7 +1090,7 @@ mod tests {
     }
 
     #[test]
-    fn keybinding_panel_uses_reverse_video_when_the_palette_is_unknown() {
+    fn keybinding_panel_uses_default_background_when_the_palette_is_unknown() {
         use crate::keys::Key;
         let (_d, mut app) = fixture_app();
         app.handle_key(Key::parse("?").unwrap());
@@ -1007,16 +1098,14 @@ mod tests {
         let (buf, _text) = drawn(&mut app, 80, 24);
         let panel = app.keybinding_panel.area().expect("panel area");
 
-        assert!(
-            buf[(panel.x + 1, panel.y + 1)]
-                .modifier
-                .contains(Modifier::REVERSED)
-        );
+        let body = &buf[(panel.x + 1, panel.y + 1)];
+        assert_eq!(body.bg, Color::Reset);
+        assert!(!body.modifier.contains(Modifier::REVERSED));
         let border = &buf[(panel.x, panel.y)];
-        assert_eq!(border.fg, Color::Blue);
+        assert_eq!(border.fg, Color::Reset);
         assert!(
             !border.modifier.contains(Modifier::REVERSED),
-            "the fallback must not reverse the ANSI-blue border"
+            "the fallback must not reverse the default-foreground border"
         );
     }
 
