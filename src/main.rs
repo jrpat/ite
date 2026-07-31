@@ -30,6 +30,7 @@ use ite_cli::cli::Cli;
 use ite_cli::config::Config;
 use ite_cli::fstree;
 use ite_cli::keys::Key;
+use ite_cli::opener::open;
 use ite_cli::runner::run_shell;
 use ite_cli::tree::Tree;
 
@@ -196,6 +197,13 @@ fn event_loop(app: &mut App, tui: &mut Tui) -> std::io::Result<Outcome> {
             Effect::None => {}
             Effect::Quit => return Ok(Outcome::Quit),
             Effect::PrintAndExit(path) => return Ok(Outcome::Print(path)),
+            Effect::Open(path) => {
+                // The handler runs detached: exploring continues either way,
+                // and a platform without an opener says so instead of dying.
+                if let Err(error) = open(&path) {
+                    app.report_error(error);
+                }
+            }
             Effect::RunShell {
                 cmd,
                 path,

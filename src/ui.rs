@@ -384,11 +384,11 @@ pub fn draw(app: &mut App, area: Rect, buf: &mut Buffer) {
         None => area,
     };
 
-    // Corrupt spans surface as a persistent banner; the tree shifts down
-    // within the viewport left above the keybinding panel.
+    // Corrupt spans and failed effects surface as a persistent banner; the
+    // tree shifts down within the viewport left above the keybinding panel.
     if !app.tree.errors().is_empty() && tree_area.height > 0 {
         let banner = format!(
-            "⚠ {} invalid record(s) — details on stderr at exit",
+            "⚠ {} error(s) — details on stderr at exit",
             app.tree.errors().len()
         );
         buf.set_stringn(

@@ -65,6 +65,9 @@ pub enum AppCommand {
     Last,
     /// Open the jump picker: fuzzy-find a node by path and move focus to it.
     Jump,
+    /// Hand the focused leaf's filesystem path to the platform's default
+    /// opener. Nodes without one — containers, JSON — are left alone.
+    Open,
     /// Exit without printing anything.
     Quit,
     /// Toggle the keybinding panel. Bound to the reserved `?` key and not
@@ -99,6 +102,7 @@ impl AppCommand {
             "first" => Self::First,
             "last" => Self::Last,
             "jump" => Self::Jump,
+            "open" => Self::Open,
             "quit" => Self::Quit,
             _ => return Err(format!("unknown app command: {s:?}")),
         };
@@ -132,6 +136,7 @@ impl AppCommand {
             Self::First => "First",
             Self::Last => "Last",
             Self::Jump => "Jump",
+            Self::Open => "Open",
             Self::Quit => "Quit",
             Self::ToggleKeybindingPanel => "Shortcuts",
         }
@@ -406,10 +411,16 @@ help = "  Custom\tCOPY\u0007\nignored"
             ("first", AppCommand::First),
             ("last", AppCommand::Last),
             ("jump", AppCommand::Jump),
+            ("open", AppCommand::Open),
             ("quit", AppCommand::Quit),
         ] {
             assert_eq!(AppCommand::parse(name).unwrap(), cmd, "{name}");
         }
+    }
+
+    #[test]
+    fn open_has_a_keybinding_panel_description() {
+        assert_eq!(AppCommand::Open.description(), "Open");
     }
 
     #[test]

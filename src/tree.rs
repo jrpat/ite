@@ -521,6 +521,17 @@ impl Tree {
         }
     }
 
+    /// The node's location in the host filesystem, when it has one. JSON nodes
+    /// are addressed by pointer within a document, so nothing outside ite can
+    /// open them.
+    pub fn filesystem_path(&self, id: NodeId) -> Option<OsString> {
+        match &self.node(id).payload {
+            Payload::Explicit(explicit) => Some(explicit.action.path.clone()),
+            Payload::Fs { .. } => Some(self.fs_path(id)),
+            Payload::Json { .. } | Payload::JsonError { .. } => None,
+        }
+    }
+
     /// Value exported to shell bindings as `$relpath`: the address within the
     /// source's natural unit — the scan root for directories, the document
     /// for JSON, the containing record for JSONL (the record itself is "").
@@ -811,6 +822,23 @@ mod tests {
         assert_eq!(tree.jump_key(file), "b-dir/inner.txt");
         assert!(tree.is_container(dir));
         assert!(!tree.is_container(file));
+    }
+
+    #[test]
+    fn only_filesystem_backed_nodes_have_a_filesystem_path() {
+        let mut tree = Tree::new_fs("/scan/root".into(), false);
+        let dir = tree.push_fs(None, "b-dir", true);
+        let file = tree.push_fs(Some(dir), "inner.txt", false);
+        assert_eq!(
+            tree.filesystem_path(file),
+            Some(OsString::from("/scan/root/b-dir/inner.txt"))
+        );
+
+        let json = crate::json_tree::from_reader(r#"{"a": 1}"#.as_bytes()).unwrap();
+        let member = json.root_ids()[0];
+        // A JSON node is addressed by pointer, not by a path anything can open.
+        assert!(!json.path(member).is_empty());
+        assert_eq!(json.filesystem_path(member), None);
     }
 
     #[test]

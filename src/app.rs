@@ -29,6 +29,8 @@ pub enum Effect {
     Quit,
     /// The default action: print the node's source-specific value and exit.
     PrintAndExit(OsString),
+    /// Hand a filesystem path to the platform's default opener.
+    Open(OsString),
     /// Run a configured shell command on the focused node.
     RunShell {
         cmd: String,
@@ -170,6 +172,7 @@ impl App {
             (&["g"], AppCommand::First),
             (&["G"], AppCommand::Last),
             (&["/"], AppCommand::Jump),
+            (&["o"], AppCommand::Open),
             (&["?"], AppCommand::ToggleKeybindingPanel),
             (&["esc"], AppCommand::Back),
             (&["q", "ctrl+c"], AppCommand::Quit),
@@ -364,6 +367,16 @@ impl App {
                     self.mode = Mode::Indexing;
                 }
             }
+            AppCommand::Open => {
+                // Containers expand rather than open, and a JSON Pointer is
+                // not a path the desktop knows how to follow.
+                if let Some(id) = self.focused_id()
+                    && self.tree.is_leaf(id)
+                    && let Some(path) = self.tree.filesystem_path(id)
+                {
+                    return Effect::Open(path);
+                }
+            }
             AppCommand::ToggleKeybindingPanel => self.keybinding_panel.toggle(),
             AppCommand::Quit => return Effect::Quit,
         }
@@ -403,6 +416,13 @@ impl App {
             self.mode = Mode::Jump(Jump::open(&self.tree));
         }
         !self.tree.fully_indexed()
+    }
+
+    /// Record a non-fatal failure from an effect the event loop performed. It
+    /// joins the source errors in the banner and the exit report, so a missing
+    /// opener is reported rather than ending the session.
+    pub fn report_error(&mut self, message: String) {
+        self.tree.record_error(message);
     }
 
     /// Whether the event loop should keep scheduling work quanta.
@@ -874,6 +894,38 @@ mod tests {
             app.handle_key(Key::parse("alt+enter").unwrap()),
             Effect::PrintAndExit(OsString::from("a"))
         );
+    }
+
+    #[test]
+    fn o_opens_the_focused_leaf_with_its_absolute_path() {
+        let (_d, mut app) = app();
+        app.run_command(AppCommand::Last); // focus leaf "c.txt"
+
+        let effect = app.handle_key(Key::parse("o").unwrap());
+
+        let Effect::Open(path) = effect else {
+            panic!("expected Open, got {effect:?}");
+        };
+        assert!(std::path::Path::new(&path).is_absolute());
+        assert!(std::path::Path::new(&path).ends_with("c.txt"));
+    }
+
+    #[test]
+    fn o_on_a_container_does_nothing() {
+        let (_d, mut app) = app();
+        assert_eq!(focused_name(&mut app), "a"); // a directory
+
+        assert_eq!(app.handle_key(Key::parse("o").unwrap()), Effect::None);
+    }
+
+    #[test]
+    fn o_on_a_json_leaf_does_nothing() {
+        // A JSON Pointer is not something the desktop can open.
+        let tree = crate::json_tree::from_reader(r#"{"a": 1}"#.as_bytes()).unwrap();
+        let mut app = App::new(tree, &Config::default(), None);
+        app.run_command(AppCommand::Last);
+
+        assert_eq!(app.handle_key(Key::parse("o").unwrap()), Effect::None);
     }
 
     #[test]

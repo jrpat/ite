@@ -112,9 +112,16 @@ Navigation is vim-flavored:
 | `ctrl+f` / `ctrl+b` | Page down / up |
 | `ctrl+d` / `ctrl+u` | Half-page down / up |
 | `g`, `G` | First line, last visible line |
+| `o` | Open the focused leaf with your desktop's default application |
 | `?` | Toggle the keybinding panel |
 | `esc` | Restore the previous root; quit from the original tree |
 | `q`, `ctrl+c` | Quit |
+
+`o` hands the focused leaf's path to the platform's default opener — `open` on
+macOS, `xdg-open` on Linux and the BSDs, `start` on Windows — and leaves it
+running detached while you keep exploring. Containers expand instead of opening,
+and JSON nodes are addressed by pointer rather than by path, so `o` does nothing
+there.
 
 The keybinding panel stays open while its listed bindings run; `?` or `esc`
 closes it. On short terminals, point at the panel and use the mouse wheel to
@@ -158,7 +165,7 @@ finishes; editors work exactly as you'd hope.
 `expand-recursively`, `collapse-recursively`, `toggle`, `toggle-recursively`,
 `select`, `accept`, `accept-alternate`, `descend`, `root`, `pop-root`, `back`,
 `next-sibling`, `prev-sibling`, `page-down`, `page-up`, `half-page-down`,
-`half-page-up`, `first`, `last`, `jump`, `quit`.
+`half-page-up`, `first`, `last`, `jump`, `open`, `quit`.
 
 `help` is optional. Its trimmed first line is displayed verbatim in the
 keybinding panel (control characters become spaces). Without `help`, `cmd`
