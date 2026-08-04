@@ -26,6 +26,10 @@ Use `.my/distribution.md` for rationale when a decision is unclear.
   checked-in workflow generator.
 - Treat `CARGO_REGISTRY_TOKEN` as bootstrap-only. Normal releases use a
   short-lived OIDC credential and should not have that secret configured.
+- Treat shell-installer verification as ephemeral. Always set
+  `ITE_CLI_UNMANAGED_INSTALL` to the temporary binary directory so cargo-dist
+  cannot modify shell startup files or persist an install receipt. Never use
+  XDG_BIN_HOME or ITE_CLI_INSTALL_DIR for a temporary verification install.
 - Stop on an identity, version, commit, checksum, attestation, or asset
   mismatch. Do not improvise past a failed invariant.
 - Do not start irreversible release work without explicit approval of the
@@ -233,7 +237,18 @@ public channel independently:
      `gh attestation verify ASSET --repo jrpat/ite`.
    - Extract it and run its `ite --version` and `ite --help`.
 3. Shell installer
-   - Install into a temporary XDG bin directory.
+   - Create a temporary installation root and invoke the installer in
+     cargo-dist's unmanaged mode:
+
+     ```sh
+     install_root="$(mktemp -d "${TMPDIR:-/tmp}/ite-vX.Y.Z-shell.XXXXXX")"
+     ITE_CLI_UNMANAGED_INSTALL="$install_root/bin" \
+       sh "$asset_dir/ite-cli-installer.sh"
+     ```
+
+   - Do not substitute `XDG_BIN_HOME` or `ITE_CLI_INSTALL_DIR`; those select a
+     managed installation path and may add a temporary `bin/env` source line
+     to `.profile`, `.zshrc`, and other startup files.
    - Run the installed binary's version and help commands.
 4. crates.io
    - Confirm `ite-cli` version `X.Y.Z` is public, unyanked, and links back to
@@ -275,4 +290,3 @@ Classify the failure before retrying:
 
 Do not declare success until the independent verification checklist passes or
 the final report explicitly names each unverified or failed channel.
-

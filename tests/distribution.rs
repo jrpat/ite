@@ -376,6 +376,8 @@ fn release_skill_is_discoverable_and_covers_the_release_contract() {
         "Do not push a local tag",
         "gh workflow run Release",
         "## Verify the published release",
+        "ITE_CLI_UNMANAGED_INSTALL",
+        "Never use XDG_BIN_HOME or ITE_CLI_INSTALL_DIR for a temporary verification install",
         "## Recover safely",
         "short-lived OIDC credential",
     ] {
