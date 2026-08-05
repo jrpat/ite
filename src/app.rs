@@ -269,7 +269,7 @@ impl App {
                     } else if self.state.node_is_expanded(id, parent) {
                         self.state.select_id(Some(self.tree.children_of(id)[0]));
                     } else {
-                        self.state.set_expanded(id, parent, true);
+                        self.expand_and_reveal_children(id);
                     }
                 }
             }
@@ -316,7 +316,7 @@ impl App {
                     if self.tree.is_leaf(id) {
                         return Effect::PrintAndExit(self.tree.output(id));
                     }
-                    self.state.set_expanded(id, self.tree.view_parent(id), true);
+                    self.expand_and_reveal_children(id);
                 }
             }
             AppCommand::Accept => {
@@ -331,8 +331,7 @@ impl App {
             }
             AppCommand::Descend => {
                 if let Some(id) = self.focused_branch() {
-                    self.state.set_expanded(id, self.tree.view_parent(id), true);
-                    self.state.ensure_projection(&self.tree, &self.query);
+                    self.expand_and_reveal_children(id);
                     let first_child = self.tree.children_of(id)[0];
                     self.state.select_id(Some(first_child));
                 }
@@ -444,8 +443,10 @@ impl App {
         let expand = !self.state.node_is_expanded(id, parent);
         if recursive {
             self.set_expanded_recursively(id, expand);
+        } else if expand {
+            self.expand_and_reveal_children(id);
         } else {
-            self.state.set_expanded(id, parent, expand);
+            self.state.set_expanded(id, parent, false);
         }
     }
 
@@ -461,6 +462,47 @@ impl App {
                 stack.extend_from_slice(self.tree.children_of(id));
             }
         }
+        if expanded {
+            self.reveal_expanded_children(root);
+        }
+    }
+
+    fn expand_and_reveal_children(&mut self, id: NodeId) {
+        self.state.set_expanded(id, self.tree.view_parent(id), true);
+        self.reveal_expanded_children(id);
+    }
+
+    /// If expansion pushes a direct child below the viewport, keep both ends
+    /// visible when they fit. Otherwise anchor the expanded container at the
+    /// top so the user can read into the oversized branch from its beginning.
+    fn reveal_expanded_children(&mut self, id: NodeId) {
+        let height = self.page_height;
+        if height == 0 {
+            return;
+        }
+        self.state.ensure_projection(&self.tree, &self.query);
+        let Some(container_index) = self.state.visible_index_of(id) else {
+            return;
+        };
+        let Some(last_child_index) = self
+            .tree
+            .children_of(id)
+            .last()
+            .and_then(|&child| self.state.visible_index_of(child))
+        else {
+            return;
+        };
+        if last_child_index < self.state.offset().saturating_add(height) {
+            return;
+        }
+
+        let branch_rows = last_child_index.saturating_sub(container_index) + 1;
+        let offset = if branch_rows <= height {
+            last_child_index + 1 - height
+        } else {
+            container_index
+        };
+        self.state.set_offset(offset);
     }
 
     fn push_root(&mut self) {
@@ -576,6 +618,24 @@ mod tests {
         (dir, App::new(tree, &Config::default(), None))
     }
 
+    /// Builds a branch below two leaves so expansion can overflow a viewport:
+    ///   a/
+    ///   b/
+    ///   d/
+    ///     d1.txt
+    ///     d2.txt
+    fn app_with_branch_at_bottom() -> (tempfile::TempDir, App) {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        std::fs::create_dir(p.join("a")).unwrap();
+        std::fs::create_dir(p.join("b")).unwrap();
+        std::fs::create_dir(p.join("d")).unwrap();
+        std::fs::write(p.join("d/d1.txt"), "").unwrap();
+        std::fs::write(p.join("d/d2.txt"), "").unwrap();
+        let tree = fstree::scan(p, false).unwrap();
+        (dir, App::new(tree, &Config::default(), None))
+    }
+
     fn focused_name(app: &mut App) -> String {
         let id = app.focused_id().expect("something focused");
         app.tree.name(id)
@@ -608,6 +668,30 @@ mod tests {
         assert_eq!(app.visible_names(), ["a", "aa", "ab.txt", "b", "c.txt"]);
         app.run_command(AppCommand::Down);
         assert_eq!(focused_name(&mut app), "aa");
+    }
+
+    #[test]
+    fn expanding_scrolls_just_enough_to_reveal_last_child_when_branch_fits() {
+        let (_d, mut app) = app_with_branch_at_bottom();
+        app.page_height = 4;
+        app.run_command(AppCommand::Down);
+        app.run_command(AppCommand::Down); // focus "d" on the viewport's last row
+
+        app.run_command(AppCommand::Expand);
+
+        assert_eq!(app.state.offset(), 1);
+    }
+
+    #[test]
+    fn expanding_an_oversized_branch_places_container_at_viewport_top() {
+        let (_d, mut app) = app_with_branch_at_bottom();
+        app.page_height = 2;
+        app.run_command(AppCommand::Down);
+        app.run_command(AppCommand::Down); // focus "d" on the viewport's last row
+
+        app.run_command(AppCommand::Expand);
+
+        assert_eq!(app.state.offset(), 2);
     }
 
     #[test]
