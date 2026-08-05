@@ -17,7 +17,7 @@ Use it like you do `fzf`:
 ```sh
 vim "$(ite)"          # pick a file, edit it
 cd "$(ite ~/src)"     # pick a directory (ctrl+enter), go there
-ite --json response.json      # explore a JSON document
+ite response.json             # explore a JSON document
 curl -s api.example.com/users | ite   # pipe JSON straight in
 ```
 
@@ -46,8 +46,9 @@ ite [OPTIONS] [PATH]
 
 | Flag | Meaning |
 |------|---------|
-| `PATH` | Directory to explore (default: `.`) |
-| `-j`, `--json <PATH>` | Explore a JSON file instead of a directory (`-` reads stdin) |
+| `PATH` | Directory or `.json`/`.jsonl` file to explore (default: `.`) |
+| `-j`, `--json <PATH>` | Explore a JSON file with any extension (`-` reads stdin) |
+| `-l`, `--jsonl <PATH>` | Explore a JSON Lines file with any extension, forcing JSONL parsing (`-` reads stdin) |
 | `-I`, `--no-ignore` | Show ignored files by disabling ignore-file rules |
 | `-e`, `--expand <N\|all>` | Start with N levels expanded (`-e 1` opens top-level containers), or all of them |
 | `-c`, `--config <FILE>` | Use this config instead of the user config; repeatable, later files win |
@@ -59,12 +60,13 @@ By default, `ite` explores `PATH` (or `.`). It shows dotfiles while respecting
 
 ### JSON
 
-Pass `--json PATH` (or `-j PATH`) to explore one JSON document instead.
+Pass a `.json` or `.jsonl` path to explore it directly. For files with other
+extensions, use `--json PATH` (or `-j PATH`) or `--jsonl PATH` (or `-l PATH`).
 Objects become tree branches, arrays keep their input order under indexed
 children, and scalar values are leaves:
 
 ```text
-$ ite --json users.json
+$ ite users.json
 ▼ users [2]
 ├ ▼ [0] {2} id: 12 · name: "Ada"
 │ ├ • id: 12

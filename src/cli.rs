@@ -35,7 +35,7 @@ impl FromStr for ExpandSpec {
 #[derive(Parser, Debug)]
 #[command(name = "ite", version, about)]
 pub struct Cli {
-    /// Directory to explore (defaults to the current directory).
+    /// Directory or .json/.jsonl file to explore (defaults to the current directory).
     pub path: Option<PathBuf>,
 
     /// JSON file to explore instead of a directory; `-` reads stdin.

@@ -127,6 +127,20 @@ fn choose_source(cli: &Cli, stdin_is_tty: bool) -> Result<Source, String> {
         return Ok(Source::JsonFile(path.clone()));
     }
     match &cli.path {
+        Some(path)
+            if path
+                .extension()
+                .is_some_and(|extension| extension == "jsonl") =>
+        {
+            Ok(Source::JsonlFile(path.clone()))
+        }
+        Some(path)
+            if path
+                .extension()
+                .is_some_and(|extension| extension == "json") =>
+        {
+            Ok(Source::JsonFile(path.clone()))
+        }
         Some(path) => Ok(Source::Dir(path.clone())),
         None if stdin_is_tty => Ok(Source::Dir(PathBuf::from("."))),
         None => Ok(Source::JsonStdin),
@@ -405,6 +419,33 @@ mod tests {
             choose_source(&cli(Some(PathBuf::from("/some/dir"))), false).unwrap(),
             Source::Dir(PathBuf::from("/some/dir"))
         );
+    }
+
+    #[test]
+    fn positional_json_path_selects_a_json_file() {
+        assert_eq!(
+            choose_source(&cli(Some(PathBuf::from("data.json"))), true).unwrap(),
+            Source::JsonFile(PathBuf::from("data.json"))
+        );
+    }
+
+    #[test]
+    fn positional_jsonl_path_selects_a_jsonl_file() {
+        assert_eq!(
+            choose_source(&cli(Some(PathBuf::from("records.jsonl"))), true).unwrap(),
+            Source::JsonlFile(PathBuf::from("records.jsonl"))
+        );
+    }
+
+    #[test]
+    fn positional_jsonl_path_forces_the_jsonl_reading() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("one.jsonl");
+        std::fs::write(&path, "7\n").unwrap();
+
+        let tree = load_tree(&cli(Some(path))).unwrap();
+
+        assert_eq!(tree.name(tree.root_ids()[0]), "$ [1]");
     }
 
     #[test]
