@@ -4,6 +4,26 @@ All notable changes to Ite will be documented in this file.
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-08-05
+
+### Highlights
+
+- Open `.json` and `.jsonl` documents by passing their paths directly, without
+  `--json` or `--jsonl`.
+- Keep newly expanded children in view with minimal scrolling, while anchoring
+  oversized branches at the top of the viewport.
+- Hide `.git` and `.jj` repository metadata during normal filesystem scans;
+  `--no-ignore` can still reveal them.
+
+### All changes
+
+- Recognized positional `.json` paths as JSON and `.jsonl` paths as forced
+  JSONL, while preserving explicit source flags and piped input.
+- Adjusted every expansion command to reveal an expanded container's direct
+  children when they fit and start oversized branches from their first row.
+- Excluded `.git` and `.jj` directories from eager and lazy filesystem scans
+  when ignore handling is enabled.
+
 ## [0.2.1] - 2026-07-31
 
 ### Highlights
