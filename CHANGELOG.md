@@ -4,6 +4,18 @@ All notable changes to Ite will be documented in this file.
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-08-08
+
+### Highlights
+
+- Press `z` to center the focused node in the viewport without changing the
+  selection.
+
+### All changes
+
+- Added the configurable `center` application command, bound to `z` by default;
+  it recenters the focused row and clamps cleanly near the tree boundaries.
+
 ## [0.2.2] - 2026-08-05
 
 ### Highlights
