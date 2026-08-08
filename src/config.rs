@@ -59,6 +59,8 @@ pub enum AppCommand {
     HalfPageDown,
     /// Scroll up half a page.
     HalfPageUp,
+    /// Center the focused node in the viewport.
+    Center,
     /// Go to the first line.
     First,
     /// Go to the last visible line.
@@ -99,6 +101,7 @@ impl AppCommand {
             "page-up" => Self::PageUp,
             "half-page-down" => Self::HalfPageDown,
             "half-page-up" => Self::HalfPageUp,
+            "center" => Self::Center,
             "first" => Self::First,
             "last" => Self::Last,
             "jump" => Self::Jump,
@@ -133,6 +136,7 @@ impl AppCommand {
             Self::PageUp => "Page up",
             Self::HalfPageDown => "Half page down",
             Self::HalfPageUp => "Half page up",
+            Self::Center => "Center",
             Self::First => "First",
             Self::Last => "Last",
             Self::Jump => "Jump",
@@ -408,6 +412,7 @@ help = "  Custom\tCOPY\u0007\nignored"
             ("page-up", AppCommand::PageUp),
             ("half-page-down", AppCommand::HalfPageDown),
             ("half-page-up", AppCommand::HalfPageUp),
+            ("center", AppCommand::Center),
             ("first", AppCommand::First),
             ("last", AppCommand::Last),
             ("jump", AppCommand::Jump),

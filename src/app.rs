@@ -169,6 +169,7 @@ impl App {
             (&["ctrl+b"], AppCommand::PageUp),
             (&["ctrl+d"], AppCommand::HalfPageDown),
             (&["ctrl+u"], AppCommand::HalfPageUp),
+            (&["z"], AppCommand::Center),
             (&["g"], AppCommand::First),
             (&["G"], AppCommand::Last),
             (&["/"], AppCommand::Jump),
@@ -351,6 +352,7 @@ impl App {
             AppCommand::PageUp => self.move_focus_by(-(self.page_height as isize)),
             AppCommand::HalfPageDown => self.move_focus_by((self.page_height / 2) as isize),
             AppCommand::HalfPageUp => self.move_focus_by(-((self.page_height / 2) as isize)),
+            AppCommand::Center => self.center_focused(),
             AppCommand::First => {
                 self.state.select_first();
             }
@@ -568,6 +570,18 @@ impl App {
         let current = self.state.selected_index().unwrap_or(0) as isize;
         let target = (current + delta).clamp(0, len as isize - 1);
         self.state.select_index(Some(target as usize));
+    }
+
+    fn center_focused(&mut self) {
+        if self.page_height == 0 {
+            return;
+        }
+        let Some(selected) = self.state.selected_index() else {
+            return;
+        };
+        let maximum = self.state.visible_len().saturating_sub(self.page_height);
+        let centered = selected.saturating_sub(self.page_height / 2);
+        self.state.set_offset(centered.min(maximum));
     }
 }
 
@@ -1128,6 +1142,22 @@ mod tests {
         assert_eq!(focused_name(&mut app), "ab.txt");
         app.run_command(AppCommand::PageUp);
         assert_eq!(focused_name(&mut app), "a");
+    }
+
+    #[test]
+    fn z_centers_the_focused_node_in_the_viewport() {
+        let (_d, mut app) = app();
+        app.run_command(AppCommand::ExpandRecursively); // 6 visible rows
+        app.page_height = 3;
+        for _ in 0..3 {
+            app.run_command(AppCommand::Down); // focus row 3
+        }
+        app.state.set_offset(0);
+
+        app.handle_key(Key::parse("z").unwrap());
+
+        assert_eq!(focused_name(&mut app), "ab.txt");
+        assert_eq!(app.state.offset(), 2);
     }
 
     #[test]

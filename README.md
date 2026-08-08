@@ -113,6 +113,7 @@ Navigation is vim-flavored:
 | `J`, `K` | Next / previous sibling, hurdling expanded subtrees |
 | `ctrl+f` / `ctrl+b` | Page down / up |
 | `ctrl+d` / `ctrl+u` | Half-page down / up |
+| `z` | Center the focused node in the viewport |
 | `g`, `G` | First line, last visible line |
 | `o` | Open the focused leaf with your desktop's default application |
 | `?` | Toggle the keybinding panel |
